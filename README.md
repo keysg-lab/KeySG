@@ -43,18 +43,12 @@ Download and place in `checkpoints/`:
 ```bash
 mkdir -p checkpoints
 
-# SAM 2.1 Large (897 MB)
+# SAM 2.1 Large
 wget -P checkpoints https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt
 
-# RAM++ (856 MB)
+# RAM++
 wget -P checkpoints https://huggingface.co/xinyu1205/recognize-anything-plus-model/resolve/main/ram_plus_swin_large_14m.pth
 ```
-
-| Model | Size |
-|-------|------|
-| SAM 2.1 Large | 897 MB |
-| RAM++ | 856 MB |
-| LLMDet (optional) | auto-downloaded from HuggingFace (`iSEE-Laboratory/llmdet_large`) |
 
 ### 🔑 API Keys
 
@@ -63,10 +57,6 @@ Create a `.env` file at the repo root:
 ```bash
 OPENAI_API_KEY=sk-...   # Required for VLM descriptions and RAG queries
 ```
-### 🦙 Local Models (Ollama)
-Todo:
-
----
 
 ## 🗂️ Dataset Preparation
 
