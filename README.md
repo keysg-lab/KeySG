@@ -25,7 +25,7 @@ This repository is the official implementation of the paper:
 
 ```bash
 # Clone
-git clone https://github.com/your-org/keysg.git
+git clone https://github.com/keysg-lab/KeySG.git
 cd keysg
 
 # Conda environment
