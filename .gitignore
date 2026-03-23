@@ -1,0 +1,60 @@
+# Output directories
+output/
+logs/
+wandb/
+.claude/
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+
+# Model files
+*.pkl
+*.pth
+*.pt
+checkpoints/
+
+# Environment
+.env
+*.log
+
+# Data files (generated)
+*.npy
+*.csv
+*.json
+
+# Large JSON files (generated queries, results)
+data/queries/*.json
+!data/queries/.gitkeep
+output/results/*.json
+data/
+output/
+
+# Media files
+*.jpg
+*.jpeg
+*.zip
+*.ply
+
+
+# IDE
+.vscode/
+.idea/
+
+# Temporary
+*.tmp
+*.bak
+
+# macOS
+.DS_Store
+
+# Coverage
+.coverage
+htmlcov/
+
+# Build
+*.egg-info/
+dist/
+build/

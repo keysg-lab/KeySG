@@ -1,0 +1,55 @@
+name: keysg
+channels:
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - pip
+
+  # pip-only packages
+  - pip:
+    # Core package (installs keysg-build / keysg-vis entry points)
+    - -e .
+
+    # torch and related
+    - torch
+    - torchvision
+    - torchaudio
+
+    # 3D / vision
+    - open3d
+    - opencv-python
+    - pillow
+    - supervision
+    - pycocotools
+
+    # Scene graph & RAG
+    - viser
+    - faiss-cpu          # swap for faiss-gpu if you have a GPU build
+    - open-clip-torch
+    - hdbscan
+    - shapely
+    - scipy
+    - scikit-learn
+
+    # Segmentation models
+    - git+https://github.com/facebookresearch/segment-anything-2
+    - git+https://github.com/xinyu1205/recognize-anything
+    - ultralytics          # YOLOWorld / RTDETR
+    - transformers
+    - accelerate
+
+    # LLM / VLM
+    - openai
+    # - ollama               # optional: local Ollama client
+
+    # Config & logging
+    - hydra-core
+    - omegaconf
+    - loguru
+    - pydantic
+    - python-dotenv
+    - tqdm
+    - numpy

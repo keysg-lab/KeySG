@@ -1,0 +1,24 @@
+# Default configuration for sim_search.py (Hydra)
+# Override fields via command line, e.g.:
+#   python sim_search.py scene_dir=output/pipeline/HMP3D/00824-Dd4bFSTQ8gi k_room_object=0
+
+# Paths
+scene_dir: output/pipeline_mini/HMP3D/00824-Dd4bFSTQ8gi
+queries_path: gt_queries/queries_combined_20250911_122840.json
+output_dir: outputs
+scene_id: auto  # 'auto' derives from last component of scene_dir
+
+# Evaluation
+eval_topks: [1, 5, 10]
+seed: 42
+k_room_object: 100
+n_floor_room_object: 100
+normalize: true
+method_tag: sim_search_baseline
+enable_llm_parsing: true
+save_in_scene_dir: true
+
+hydra:
+  run:
+    dir: .  # keep original working directory
+  output_subdir: null
