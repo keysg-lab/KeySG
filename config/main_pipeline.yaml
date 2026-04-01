@@ -1,0 +1,92 @@
+# Main Pipeline Hydra Configuration
+# This file configures the HovFun 3D scene understanding pipeline
+
+# Dataset configuration
+dataset:
+  kind: scannet  # Dataset type: hmp3d (HM3DSem), fungraph3d (FunGraph3D), replica (Replica), clio (ClioDataset), sfm (SFMDataset), scanet (ScanNet)
+  # root_dir: /home/werby/datasets/clio_data/cubicle/raw  # Path to scene data directory
+  # root_dir: /home/werby/datasets/FunGraph3D/0kitchen
+  # root_dir: /mnt/ssd2/datasets/Replica_RGBD/Replica/office4
+  root_dir: /mnt/ssd2/datasets/SIR/Demo/kitchen_1fps_da3 # Example ScanNet scene path
+  depth_scale: 1000.0  # Depth image scaling factor (mm to meters)
+  depth_min: 0.3       # Minimum valid depth value (meters)
+  depth_max: 4.0       # Maximum valid depth value (meters)
+
+# Output directory for all pipeline results
+output_dir: output/keysg_rag1
+
+# Loading configuration - set to true to load existing results instead of recomputing
+load:
+  scene_segmentation: false  # Load existing floor/room segmentation
+  scene_description: false   # Load existing room descriptions
+  nodes: false              # Load existing extracted object nodes
+
+# Vision-language model configuration for room descriptions
+vlm:
+  provider: openai  # openai | ollama
+  model: gpt-5-mini  # OpenAI model or Ollama model name (e.g., qwen3-vl)
+  # text_model: gpt-5-mini  # Optional separate model for text-only summarization
+
+# Scene segmentation parameters
+segmentation:
+  fuse_every_k: 10                    # Fuse point clouds every K frames (memory optimization)
+  voxel_size: 0.05                    # Voxel grid resolution for downsampling (meters)
+  grid_resolution: 0.1                # Grid resolution for floor detection (meters)
+  save_intermediate: true            # Save intermediate segmentation results
+  sampling_eps: 0.001                  # DBSCAN epsilon parameter for clustering [Keyframe sampling]
+  sampling_min_samples: 2             # DBSCAN minimum samples per cluster [Keyframe sampling]
+  sampling_rot_weight: 1.5            # Weight for rotation in pose sampling distance [Keyframe sampling]
+  points_in_room_threshold: 0.65      # Minimum fraction of points to assign frame to room
+
+# Object node extraction and merging parameters
+nodes:
+  segmentor: gsam2                # Segmentation backend
+  object_tags: vlm                  # Method for object tags: 'vlm' (vision-language model) or 'ram' (RAM++ tagger)
+  extract_functional_elements: false # Enable/disable functional element extraction
+  functional_elements_method: sparse_tags  # Method for functional elements: 'sparse_tags' or 'detector' (funGraph model) or 'dense_tags' (per object vlm tags)
+  fun_tags: ""                      # Optional fixed functional element tags (empty = use VLM tagging)
+  use_keyframes_only: true         # true: run detection on keyframes only (sparse_indices) | false: all dense frames subsampled by skip_frames
+  skip_frames: 15                   # Subsample stride when use_keyframes_only=false
+  max_frames: 0                    # Maximum frames per room (0 = use all available)
+  post_hoc_iou_thresh: 0.05        # IoU threshold for post-processing merging
+  post_hoc_sim_thresh: 0.65         # Similarity threshold for post-processing merging
+  similarity_threshold: 0.5       # Geometric similarity threshold for node merging
+  radius: 0.02                     # Spatial radius for node merging (meters)
+  visualize: true                  # Enable/disable 3D visualization
+  save_visualizations: true        # Save visualization files (.ply format)
+  # GroundingSAM2 configuration passed to NodesRepo
+  gsam2:
+    detection_mode: llmdet  # llmdet | grounding_dino | owlv2
+    sam2_checkpoint: ./checkpoints/sam2.1_hiera_large.pt
+    sam2_model_config: sam2_configs/sam2.1/sam2.1_hiera_l.yaml
+    # Backend-specific model IDs
+    llmdet_model_id: iSEE-Laboratory/llmdet_large
+    grounding_model_id: IDEA-Research/grounding-dino-base
+    owlv2_model_id: google/owlv2-base-patch16-ensemble
+    # RAM tagger (used to auto-generate prompts when tags are empty)
+    ram_pretrained: ./checkpoints/ram_plus_swin_large_14m.pth
+    ram_image_size: 384
+  # Functional elements detector (FunGraph)
+  fungraph_checkpoint: ./checkpoints/fungraph_det.pt
+  # Per-object descriptions: keyframe extraction always runs (free); VLM overwrite is optional
+  object_desc:
+    enabled: false         # true: additionally run red-bbox VLM calls to overwrite keyframe descriptions
+    batch_size: 20         # VLM batch size (only used when enabled: true)
+    update_label: true     # Replace node.label with the VLM/keyframe-refined name
+
+# RAG (Retrieval-Augmented Generation) configuration for scene querying
+build_rag: false  # Build RAG database after pipeline completion
+rag:
+  embedding_model: text-embedding-3-small  # OpenAI embedding model
+  compute_visual_embeddings: true          # Compute visual (CLIP) embeddings for objects/frames
+  use_cache: true                          # Cache embeddings to avoid recomputation
+
+# Disable hydra loggings
+defaults:  
+  - _self_  
+  - override hydra/hydra_logging: disabled  
+  - override hydra/job_logging: disabled  
+hydra:  
+  output_subdir: null  
+  run:  
+    dir: .

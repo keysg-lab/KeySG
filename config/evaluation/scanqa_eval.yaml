@@ -1,0 +1,21 @@
+# Example Hydra config for scanqa_eval_batch.py
+scanqa_json: /home/werby/datasets/ScanNetv2/ScanQA_v1/ScanQA_v1.0/ScanQA_v1.0_test_w_obj.json
+# To select all scenes in scene_dir_root, use:
+scene_ids: ["ALL"]
+# scene_ids:
+#  - scene0011_00
+scene_dir_root: /home/werby/hovfun/output/pipeline_scanqa/ScanNet
+output_json: ./scanqa_test_w_obj_txt.json
+top_k: 10
+model: gpt-5-nano
+
+
+# Disable hydra loggings
+defaults:  
+  - _self_  
+  - override hydra/hydra_logging: disabled  
+  - override hydra/job_logging: disabled  
+hydra:  
+  output_subdir: null  
+  run:  
+    dir: .

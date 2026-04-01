@@ -1,0 +1,17 @@
+main:
+  device: cuda
+  dataset: hm3dsem
+  scene_id: 00877-4ok3usBNeis # scene0011_00
+  split: val
+  dataset_path: /home/werby/Msc/HOV-SG/data/hm3dsem_walks/
+  raw_data_path: /home/werby/datasets/hmp3d/hm3d/
+  save_path: /home/werby/hovfun/output/pipeline_mini/HMP3D
+dataset:
+  hm3dsem:
+    gt_skip_frames: 1
+eval:
+  association_metric: overlap
+  obj_labels: HM3DSEM_LABELS
+  hm3dsem:
+    top_k_object_semantic_eval: [5, 10, 25, 100, 250, 500]
+    obj_labels: HM3DSEM_LABELS

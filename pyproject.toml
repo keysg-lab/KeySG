@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hovfun"
+version = "0.1.0"
+description = "KeySG: Hierarchical Keyframe-Based 3D Scene Graphs"
+requires-python = ">=3.9"
+dependencies = [
+    "torch",
+    "numpy",
+    "open3d",
+    "viser",
+    "loguru",
+    "omegaconf",
+    "hydra-core",
+    "openai",
+    "faiss-cpu",
+    "open-clip-torch",
+    "pillow",
+    "tqdm",
+    "shapely",
+    "pydantic",
+    "hdbscan",
+    "scipy",
+    "scikit-learn",
+    "opencv-python",
+    "python-dotenv",
+]
+
+[project.scripts]
+keysg-build = "hovfun.cli:build"
+keysg-vis   = "hovfun.cli:visualize"
+
+[tool.setuptools.packages.find]
+include = ["hovfun*"]
