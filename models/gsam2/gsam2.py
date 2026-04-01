@@ -20,6 +20,28 @@ from transformers import (
     Owlv2Processor,
     Owlv2ForObjectDetection,
 )
+# Compatibility shim: transformers 5.x moved/removed several helpers
+import transformers.modeling_utils as _tmu
+import transformers.pytorch_utils as _tpu
+
+# Copy functions that moved to pytorch_utils
+for _name in ("apply_chunking_to_forward", "prune_linear_layer", "prune_conv1d_layer", "meshgrid"):
+    if not hasattr(_tmu, _name) and hasattr(_tpu, _name):
+        setattr(_tmu, _name, getattr(_tpu, _name))
+
+# Provide find_pruneable_heads_and_indices — fully removed in transformers 5.x
+if not hasattr(_tmu, "find_pruneable_heads_and_indices"):
+    def _find_pruneable_heads_and_indices(heads, n_heads, head_size, already_pruned_heads):
+        mask = torch.ones(n_heads, head_size)
+        heads = set(heads) - already_pruned_heads
+        for head in heads:
+            head = head - sum(1 if h < head else 0 for h in already_pruned_heads)
+            mask[head] = 0
+        mask = mask.view(-1).contiguous().eq(1)
+        index = torch.arange(len(mask))[mask].long()
+        return heads, index
+    _tmu.find_pruneable_heads_and_indices = _find_pruneable_heads_and_indices
+
 from ram.models import ram_plus, ram, tag2text
 from ram import inference_ram as inference
 from ram import get_transform
@@ -30,7 +52,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 # Local scene-understanding VLM tagger (optional alternative to RAM++)
 from models.llm.gpt_vlm import GPT_VLMInterface as VLMInterface  # unified VLM client
-from hovfun.utils.img_utils import mask_subtract_contained
+from keysg.utils.img_utils import mask_subtract_contained
 
 COLOR_PALETTES = {
     "default": None,  # Use supervision default

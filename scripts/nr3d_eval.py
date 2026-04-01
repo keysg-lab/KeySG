@@ -38,14 +38,14 @@ from loguru import logger
 # Local imports
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__) + "/.."))
 
-from hovfun.rag.graph_context_retriever import GraphContextRetriever, SearchResult
-from hovfun.rag.query_analysis import (
+from keysg.rag.graph_context_retriever import GraphContextRetriever, SearchResult
+from keysg.rag.query_analysis import (
     analyze_and_expand_query,
     QueryAnalysisResult,
     _QuerySchema,
     SYSTEM_INSTRUCTIONS as _QUERY_ANALYSIS_INSTRUCTIONS,
 )
-from hovfun.utils.load_utils import load_scene_nodes, get_objects
+from keysg.utils.load_utils import load_scene_nodes, get_objects
 
 from eval_helpers import (
     # Geometry / BBox

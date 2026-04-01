@@ -17,15 +17,15 @@ from tqdm import tqdm
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from hovfun.scene_segmentor.obj_node import ObjNode
-from hovfun.utils.clip_utils import CLIPFeatureExtractor
-from hovfun.utils.img_utils import crop_image, get_mask_score
-from hovfun.utils.pcd_utils import (
+from keysg.scene_segmentor.obj_node import ObjNode
+from keysg.utils.clip_utils import CLIPFeatureExtractor
+from keysg.utils.img_utils import crop_image, get_mask_score
+from keysg.utils.pcd_utils import (
     compute_3d_bbox_iou,
     find_overlapping_ratio_faiss,
     pcd_denoise_dbscan,
 )
-from hovfun.utils.vis_utils import (
+from keysg.utils.vis_utils import (
     visualize_functional_elements,
     visualize_nodes_collection,
     visualize_single_node,

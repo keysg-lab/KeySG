@@ -26,7 +26,7 @@ from scipy.spatial.transform import Rotation
 
 import viser
 
-from hovfun.utils.load_utils import get_floors, get_objects, get_rooms, load_scene_nodes
+from keysg.utils.load_utils import get_floors, get_objects, get_rooms, load_scene_nodes
 
 
 # ---------------------------------------------------------------------------
@@ -229,8 +229,8 @@ def _run_grounding_query(
     """RAG retrieval + LLM object selection — mirrors nr3d_eval._run_keysg_rag pipeline."""
     from pydantic import BaseModel, Field
 
-    from hovfun.rag.graph_context_retriever import GraphContextRetriever
-    from hovfun.rag.query_analysis import (
+    from keysg.rag.graph_context_retriever import GraphContextRetriever
+    from keysg.rag.query_analysis import (
         _QuerySchema,
         SYSTEM_INSTRUCTIONS as _QUERY_ANALYSIS_INSTRUCTIONS,
     )
@@ -393,7 +393,7 @@ def _run_open_qa(
     """RAG retrieval + LLM for open-ended scene questions — same context pipeline as grounding."""
     from pydantic import BaseModel, Field
 
-    from hovfun.rag.query_analysis import (
+    from keysg.rag.query_analysis import (
         _QuerySchema,
         SYSTEM_INSTRUCTIONS as _QUERY_ANALYSIS_INSTRUCTIONS,
     )
@@ -821,7 +821,7 @@ class KeySGVisualizer:
     def _ensure_retriever(self):
         """Lazily build and cache the GraphContextRetriever (keeps CLIP model loaded)."""
         if self._grounding_retriever is None:
-            from hovfun.rag.graph_context_retriever import GraphContextRetriever
+            from keysg.rag.graph_context_retriever import GraphContextRetriever
 
             logger.info(
                 "Building grounding retriever (first query — CLIP model loading)…"

@@ -15,15 +15,7 @@ from pydantic import BaseModel, Field
 
 import numpy as np
 from loguru import logger
-
-try:
-    from tqdm import tqdm as _tqdm
-except ImportError:  # pragma: no cover
-
-    def _tqdm(it, **kwargs):  # type: ignore[misc]
-        return it
-
-
+from tqdm import tqdm as _tqdm
 import faiss
 
 
@@ -42,7 +34,7 @@ from .graph_rag_utils import (
 
 # Import utilities - handle both installed package and direct execution scenarios
 try:
-    from hovfun.utils.load_utils import load_scene_nodes, get_objects
+    from keysg.utils.load_utils import load_scene_nodes, get_objects
 except ImportError:
     import sys
     import os
@@ -51,7 +43,7 @@ except ImportError:
     _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     if _project_root not in sys.path:
         sys.path.insert(0, _project_root)
-    from hovfun.utils.load_utils import load_scene_nodes, get_objects
+    from keysg.utils.load_utils import load_scene_nodes, get_objects
 
 
 @dataclass

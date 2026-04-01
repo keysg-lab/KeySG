@@ -18,19 +18,15 @@ import hydra
 from loguru import logger
 from omegaconf import DictConfig
 
-from dataloader.clio import ClioDataset
-from dataloader.fungraph3d import FunGraph3DDataset
 from dataloader.hmp3d import HM3DSemDataset
 from dataloader.replica import ReplicaDataset
 from dataloader.scannet import ScanNetDataset
-from dataloader.sfm import SFMDataset
-from hovfun.graph.keysg_graph import KeySGGraph
-from hovfun.scene_descriptor.scene_descriptor import SceneDescriptor
-from hovfun.scene_segmentor.extract_nodes import NodesRepo
-from hovfun.scene_segmentor.scene_segmentor import SceneSegmentor
-from hovfun.utils.logging_setup import setup_logging
-from hovfun.utils.vis_utils import (
-    label_keyframe,
+from keysg.graph import KeySGGraph
+from keysg.scene_descriptor.scene_descriptor import SceneDescriptor
+from keysg.scene_segmentor.extract_nodes import NodesRepo
+from keysg.scene_segmentor.scene_segmentor import SceneSegmentor
+from keysg.utils.logging_setup import setup_logging
+from keysg.utils.vis_utils import (
     project_objects_to_masks,
     match_detections_to_objects,
     draw_id_labels,
@@ -43,20 +39,13 @@ DATASET_REGISTRY = {
     "hm3d": HM3DSemDataset,
     "hmp3d": HM3DSemDataset,
     "hm3dsem": HM3DSemDataset,
-    "fungraph3d": FunGraph3DDataset,
-    "fungraph": FunGraph3DDataset,
-    "fg3d": FunGraph3DDataset,
     "replica": ReplicaDataset,
-    "clio": ClioDataset,
-    "cliodataset": ClioDataset,
-    "sfm": SFMDataset,
-    "sfmdataset": SFMDataset,
     "scanet": ScanNetDataset,
     "scannet": ScanNetDataset,
 }
 
 
-class HovFunPipeline:
+class KeySGPipeline:
     """Main pipeline for scene segmentation, description, and node extraction."""
 
     def __init__(self, cfg: DictConfig):
@@ -395,7 +384,7 @@ class HovFunPipeline:
         )
 
         if self._shared_nodes_repo is None:
-            from hovfun.utils.clip_utils import DEFAULT_CLIP_CONFIG
+            from keysg.utils.clip_utils import DEFAULT_CLIP_CONFIG
 
             self._shared_nodes_repo = NodesRepo(
                 dataset=self.dataset,
@@ -466,43 +455,9 @@ class HovFunPipeline:
         self.keysg_graph.save(os.path.join(self.output_dir, "keysg_graph.json"))
         return self.keysg_graph
 
-    def query_scene(self, query_text: str, use_rag: bool = True) -> Dict[str, Any]:
-        """Query the scene using natural language."""
-        if self.keysg_graph is None:
-            self.build_keysg_graph(build_rag=use_rag)
-
-        if use_rag:
-            result = self.keysg_graph.query(query_text)
-            return {
-                "query": result.query,
-                "target_object_id": result.target_object_id,
-                "target_label": (
-                    result.target_object.label if result.target_object else None
-                ),
-                "room_id": result.room_id,
-                "floor_id": result.floor_id,
-                "confidence": result.confidence,
-                "bbox_3d": result.bbox_3d,
-                "metadata": result.metadata,
-            }
-
-        # Fallback to CLIP search via NodesRepo
-        if self.object_nodes and self._shared_nodes_repo:
-            matches = self._shared_nodes_repo.find_closest_objects(query_text, top_k=5)
-            if matches:
-                best, similarity = matches[0]
-                return {
-                    "query": query_text,
-                    "target_object_id": best.id,
-                    "target_label": best.label,
-                    "confidence": float(similarity),
-                    "all_matches": [(n.label, float(s)) for n, s in matches],
-                }
-        return {"query": query_text, "target_object_id": None}
-
     def run(self) -> Dict[str, Any]:
         """Run the complete pipeline."""
-        logger.info("Starting HovFun pipeline...")
+        logger.info("Starting KeySG pipeline...")
         self.setup()
 
         # Scene Segmentation
@@ -570,17 +525,17 @@ class HovFunPipeline:
         else:
             cfg = getattr(self.cfg.nodes, "gsam2", {})
             segmentor = GroundingSAM2(
-                    detection_mode="llmdet",
-                    sam2_checkpoint=cfg.get(
-                        "sam2_checkpoint", "./checkpoints/sam2.1_hiera_large.pt"
-                    ),
-                    sam2_model_config=cfg.get(
-                        "sam2_model_config", "sam2_configs/sam2.1/sam2.1_hiera_l.yaml"
-                    ),
-                    llmdet_model_id=cfg.get(
-                        "llmdet_model_id", "iSEE-Laboratory/llmdet_large"
-                    ),
-                )
+                detection_mode="llmdet",
+                sam2_checkpoint=cfg.get(
+                    "sam2_checkpoint", "./checkpoints/sam2.1_hiera_large.pt"
+                ),
+                sam2_model_config=cfg.get(
+                    "sam2_model_config", "sam2_configs/sam2.1/sam2.1_hiera_l.yaml"
+                ),
+                llmdet_model_id=cfg.get(
+                    "llmdet_model_id", "iSEE-Laboratory/llmdet_large"
+                ),
+            )
 
         total_labeled = 0
         for floor, rooms in self.floor_rooms:
@@ -721,11 +676,11 @@ class HovFunPipeline:
         logger.info("Saved floor summaries for {} floor(s)", len(floor_summaries))
 
 
-@hydra.main(version_base=None, config_path="config", config_name="main_pipeline")
+@hydra.main(version_base=None, config_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "config"), config_name="main_pipeline")
 def main(cfg: DictConfig) -> None:
     """Main entry point."""
     setup_logging()
-    pipeline = HovFunPipeline(cfg)
+    pipeline = KeySGPipeline(cfg)
     pipeline.run()
 
 

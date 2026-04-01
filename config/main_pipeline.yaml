@@ -3,10 +3,7 @@
 
 # Dataset configuration
 dataset:
-  kind: scannet  # Dataset type: hmp3d (HM3DSem), fungraph3d (FunGraph3D), replica (Replica), clio (ClioDataset), sfm (SFMDataset), scanet (ScanNet)
-  # root_dir: /home/werby/datasets/clio_data/cubicle/raw  # Path to scene data directory
-  # root_dir: /home/werby/datasets/FunGraph3D/0kitchen
-  # root_dir: /mnt/ssd2/datasets/Replica_RGBD/Replica/office4
+  kind: scannet  # Dataset type: hmp3d (HM3DSem), replica (Replica), scanet (ScanNet)
   root_dir: /mnt/ssd2/datasets/SIR/Demo/kitchen_1fps_da3 # Example ScanNet scene path
   depth_scale: 1000.0  # Depth image scaling factor (mm to meters)
   depth_min: 0.3       # Minimum valid depth value (meters)
@@ -75,7 +72,7 @@ nodes:
     update_label: true     # Replace node.label with the VLM/keyframe-refined name
 
 # RAG (Retrieval-Augmented Generation) configuration for scene querying
-build_rag: false  # Build RAG database after pipeline completion
+build_rag: true  # Build RAG database after pipeline completion
 rag:
   embedding_model: text-embedding-3-small  # OpenAI embedding model
   compute_visual_embeddings: true          # Compute visual (CLIP) embeddings for objects/frames

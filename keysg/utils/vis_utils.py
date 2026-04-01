@@ -14,7 +14,7 @@ from loguru import logger
 from PIL import Image
 import matplotlib.pyplot as plt
 
-from hovfun.scene_segmentor.obj_node import ObjNode
+from keysg.scene_segmentor.obj_node import ObjNode
 
 
 def generate_colors(num_colors: int) -> np.ndarray:

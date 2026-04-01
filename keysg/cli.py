@@ -23,6 +23,6 @@ def build() -> None:
 
 def visualize() -> None:
     """Entry point for `keysg-vis`. Opens the Viser scene visualizer."""
-    from hovfun.visualization.visualizer import main
+    from keysg.visualization.visualizer import main
 
     main()

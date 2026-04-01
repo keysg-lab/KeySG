@@ -12,8 +12,8 @@ from loguru import logger
 import pickle
 import open3d as o3d
 
-from hovfun.scene_segmentor import Floor, Room
-from hovfun.scene_segmentor.obj_node import ObjNode as Object
+from keysg.scene_segmentor import Floor, Room
+from keysg.scene_segmentor.obj_node import ObjNode as Object
 
 
 def load_scene_nodes(output_dir: str) -> Dict[str, Dict[str, List[dict]]]:

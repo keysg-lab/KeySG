@@ -41,7 +41,7 @@ except Exception:  # pragma: no cover
 
 # Optional CLIP feature extractor
 try:  # pragma: no cover - optional dependency
-    from hovfun.utils.clip_utils import (
+    from keysg.utils.clip_utils import (
         CLIPFeatureExtractor,
         DEFAULT_CLIP_CONFIG as _DEFAULT_CLIP_CONFIG,
     )
@@ -56,7 +56,7 @@ except ImportError:  # pragma: no cover
         )
         if _project_root not in sys.path:
             sys.path.insert(0, _project_root)
-        from hovfun.utils.clip_utils import (
+        from keysg.utils.clip_utils import (
             CLIPFeatureExtractor,
             DEFAULT_CLIP_CONFIG as _DEFAULT_CLIP_CONFIG,
         )
