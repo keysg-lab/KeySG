@@ -11,10 +11,7 @@ from loguru import logger
 
 import numpy as np
 
-try:
-    from ..rag.graph_context_retriever import GraphContextRetriever
-except ImportError:
-    GraphContextRetriever = None
+from keysg.rag.graph_context_retriever import GraphContextRetriever
 
 
 @dataclass
