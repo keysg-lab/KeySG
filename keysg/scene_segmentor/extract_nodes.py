@@ -117,8 +117,7 @@ class NodesRepo:
         if NodesRepo._shared_segmentor is None:
             logger.info("[NodesRepo] Loading GroundingSAM2...")
             cfg = self.gsam2_config
-            detection_mode = (cfg.get("detection_mode") or "llmdet").strip().lower()
-            gsam_kwargs = self._build_gsam_kwargs(cfg, detection_mode)
+            gsam_kwargs = self._build_gsam_kwargs(cfg, "llmdet")
             NodesRepo._shared_segmentor = GroundingSAM2(**gsam_kwargs)
         self.gsam2 = NodesRepo._shared_segmentor
 
@@ -129,42 +128,15 @@ class NodesRepo:
 
     def _build_gsam_kwargs(self, cfg: Dict, detection_mode: str) -> Dict[str, Any]:
         """Build kwargs for GroundingSAM2 initialization."""
-        kwargs = {
-            "detection_mode": detection_mode,
+        return {
             "sam2_checkpoint": cfg.get(
                 "sam2_checkpoint", "./checkpoints/sam2.1_hiera_large.pt"
             ),
             "sam2_model_config": cfg.get(
                 "sam2_model_config", "sam2.1/sam2.1_hiera_l.yaml"
             ),
-            "ram_pretrained": cfg.get(
-                "ram_pretrained", "./checkpoints/ram_plus_swin_large_14m.pth"
-            ),
-            "ram_image_size": cfg.get("ram_image_size", 384),
+            "llmdet_model_id": cfg.get("llmdet_model_id", "iSEE-Laboratory/llmdet_large"),
         }
-
-        model_id_map = {
-            "grounding_dino": (
-                "grounding_model_id",
-                "IDEA-Research/grounding-dino-base",
-            ),
-            "owlv2": ("owlv2_model_id", "google/owlv2-base-patch16-ensemble"),
-            "llmdet": ("llmdet_model_id", "iSEE-Laboratory/llmdet_large"),
-        }
-
-        if detection_mode in model_id_map:
-            key, default = model_id_map[detection_mode]
-            kwargs[key] = cfg.get(key, default)
-        else:
-            logger.warning(
-                f"Unknown detection_mode='{detection_mode}', defaulting to 'llmdet'"
-            )
-            kwargs["detection_mode"] = "llmdet"
-            kwargs["llmdet_model_id"] = cfg.get(
-                "llmdet_model_id", "iSEE-Laboratory/llmdet_large"
-            )
-
-        return kwargs
 
     def extract_initial_nodes(
         self,
