@@ -942,7 +942,6 @@ class GraphContextRetriever:
                     rr.chunk.metadata.get("floor_id")
                     or rr.chunk.metadata.get("floor")
                     or rr.chunk.metadata.get("floorId")
-                    or floor_id
                 )
                 == floor_id
             ]
@@ -1015,9 +1014,12 @@ class GraphContextRetriever:
                 z_text = _z(text_scores)
                 z_vis = _z(vis_scores)
                 for (cid, v), zt, zv in zip(by_id.items(), z_text, z_vis):
-                    combined = zt
+                    # Normalize by modality count so multi-modal objects
+                    # don't get an unfair additive boost over text-only ones.
                     if "visual_score" in v:
-                        combined += zv
+                        combined = (zt + zv) / 2.0
+                    else:
+                        combined = zt
                     rankings.append(
                         {
                             "chunk_id": cid,

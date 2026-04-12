@@ -14,7 +14,7 @@ from sam2.sam2_image_predictor import SAM2ImagePredictor
 from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
 
 # Make project root importable before local imports
-sys.path.insert(0, "/home/werby/PhD/key_frame_scene_graph/KeySG")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from models.llm.gpt_vlm import GPT_VLMInterface as VLMInterface
 from keysg.utils.img_utils import mask_subtract_contained
@@ -139,7 +139,7 @@ class GroundingSAM2:
                 pil_image, [tags], box_threshold, multimask_output
             )
 
-        all_boxes, all_masks, all_scores, all_labels, all_class_ids = [], [], [], [], []
+        all_boxes, all_masks, all_scores, all_labels = [], [], [], []
 
         for i in range(0, len(tags), self.llmdet_max_tags_per_batch):
             batch_tags = tags[i : i + self.llmdet_max_tags_per_batch]
@@ -152,8 +152,6 @@ class GroundingSAM2:
                 all_masks.append(batch_results["masks"])
                 all_scores.append(batch_results["scores"])
                 all_labels.extend(batch_results["labels"])
-                base_id = len(all_class_ids)
-                all_class_ids.extend(batch_results["class_ids"] + base_id)
 
         if not all_boxes:
             return {
@@ -168,16 +166,17 @@ class GroundingSAM2:
         merged_boxes = np.vstack(all_boxes)
         merged_masks = np.vstack(all_masks)
         merged_scores = np.hstack(all_scores)
-        merged_class_ids = np.array(all_class_ids)
 
         final_indices = self._resolve_mask_overlaps(merged_masks, merged_scores)
 
+        # Regenerate sequential class_ids after overlap resolution so that
+        # labels[i] is always aligned with class_ids[i].
         return {
             "boxes": merged_boxes[final_indices],
             "masks": merged_masks[final_indices].astype(bool),
             "scores": merged_scores[final_indices],
             "labels": [all_labels[i] for i in final_indices],
-            "class_ids": merged_class_ids[final_indices],
+            "class_ids": np.arange(len(final_indices)),
             "image_size": pil_image.size,
         }
 

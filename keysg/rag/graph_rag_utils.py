@@ -92,10 +92,14 @@ class Chunk:
         }
 
 
-def synthesize_object_text(obj: Dict[str, Any]) -> str:
+def synthesize_object_text(obj: Dict[str, Any], centroid: Optional[Any] = None) -> str:
     """Create a canonical descriptive string for an object entry.
 
     Expected keys (best-effort): name, description, affordances(list), state, location description
+
+    Args:
+        obj: Object dictionary with descriptive fields.
+        centroid: Optional 3D centroid array (x, y, z) to embed spatial coordinates.
     """
     name = obj.get("name") or obj.get("id") or "object"
     desc = obj.get("description") or ""
@@ -130,10 +134,24 @@ def synthesize_object_text(obj: Dict[str, Any]) -> str:
         or "an unspecified location"
     )
 
-    return (
+    text = (
         f"Name: {name}. Description: {desc} "
         f"It can be used to {afford_txt}. It is currently {state} and is located {loc}."
     )
+
+    # Append 3D world coordinates when available so the embedding
+    # can encode spatial position for "nearest" / "closest" queries.
+    if centroid is not None:
+        try:
+            text += (
+                f" World position: x={float(centroid[0]):.2f},"
+                f" y={float(centroid[1]):.2f},"
+                f" z={float(centroid[2]):.2f}."
+            )
+        except (IndexError, TypeError, ValueError):
+            pass  # silently skip malformed centroids
+
+    return text
 
 
 def ensure_text(*parts: Any) -> str:
@@ -601,6 +619,15 @@ def build_chunks_from_descriptions(
 
         seg_dir = os.path.join(output_dir, "segmentation")
         if os.path.isdir(seg_dir):
+            # Build an O(1) index from object_id -> chunk list position
+            # so we can replace in-place instead of rebuilding the list.
+            _obj_chunk_idx: Dict[str, int] = {}
+            for _ci, _c in enumerate(chunks):
+                if _c.doc_type == "object":
+                    _oid = _c.metadata.get("object_id")
+                    if _oid:
+                        _obj_chunk_idx[_oid] = _ci
+
             # Pre-collect all pkl paths for accurate tqdm total
             pkl_entries: List[Tuple[str, str]] = []  # (full_path, room_id)
             for floor_d in sorted(os.listdir(seg_dir)):
@@ -632,6 +659,23 @@ def build_chunks_from_descriptions(
                     continue
                 vlm = nd.get("vlm_description") or {}
                 label = nd.get("label") or "object"
+
+                # Compute centroid from pickled PCD when available
+                centroid = None
+                pcd_data = nd.get("pcd")
+                if isinstance(pcd_data, dict) and pcd_data.get("points") is not None:
+                    pts = pcd_data["points"]
+                    if hasattr(pts, "__len__") and len(pts) > 0:
+                        centroid = np.asarray(pts).mean(axis=0)
+                elif pcd_data is not None:
+                    # pcd_data may be an open3d PointCloud object
+                    try:
+                        pts = np.asarray(pcd_data.points)
+                        if len(pts) > 0:
+                            centroid = pts.mean(axis=0)
+                    except Exception:
+                        pass
+
                 obj_for_text = {
                     "name": vlm.get("name") or label,
                     "description": vlm.get("description") or "",
@@ -644,7 +688,7 @@ def build_chunks_from_descriptions(
                 new_chunk = Chunk(
                     id=obj_id,
                     doc_type="object",
-                    content=synthesize_object_text(obj_for_text),
+                    content=synthesize_object_text(obj_for_text, centroid=centroid),
                     metadata={
                         "room_id": room_id,
                         "object_id": obj_id,
@@ -652,12 +696,12 @@ def build_chunks_from_descriptions(
                         "has_vlm_description": bool(vlm),
                     },
                 )
-                if obj_id in seen_obj_ids:
-                    # Replace existing room-VLM chunk with richer node-pickle version
-                    chunks = [
-                        c for c in chunks if c.metadata.get("object_id") != obj_id
-                    ]
-                chunks.append(new_chunk)
+                if obj_id in _obj_chunk_idx:
+                    # O(1) in-place replacement instead of O(n) list rebuild
+                    chunks[_obj_chunk_idx[obj_id]] = new_chunk
+                else:
+                    _obj_chunk_idx[obj_id] = len(chunks)
+                    chunks.append(new_chunk)
                 seen_obj_ids.add(obj_id)
 
     return chunks
