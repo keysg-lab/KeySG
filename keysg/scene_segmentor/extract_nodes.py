@@ -248,9 +248,9 @@ class NodesRepo:
             bboxs_2d=[bbox_2d],
             label=label,
             pcd=pcd_3d,
-            feature=np.array([]),
+            feature=None,
             masks_2d=[mask_2d],
-            rgb_frames=[rgb_image],
+            rgb_frames=[rgb_image.copy()],
             frame_indices=[frame_idx],
         )
 
@@ -262,6 +262,9 @@ class NodesRepo:
         post_hoc_iou_thresh: float = 0.05,
         post_hoc_sim_thresh: float = 0.8,
         extract_functional_elements: bool = True,
+        structural_threshold_factor: float = 0.5,
+        denoise_eps: float = 0.05,
+        denoise_min_points: int = 10,
     ) -> List[ObjNode]:
         """Merge and enrich object nodes through spatial merging, denoising, and feature extraction."""
         if not nodes:
@@ -270,11 +273,13 @@ class NodesRepo:
 
         logger.info(f"Starting merge with {len(nodes)} nodes...")
 
-        merged = self._greedy_merge_nodes(nodes.copy(), similarity_threshold, radius)
+        merged = self._greedy_merge_nodes(
+            nodes.copy(), similarity_threshold, radius, structural_threshold_factor
+        )
         merged = self._post_hoc_merge_nodes(
             merged, post_hoc_iou_thresh, post_hoc_sim_thresh, radius
         )
-        self._denoise_nodes(merged)
+        self._denoise_nodes(merged, eps=denoise_eps, min_points=denoise_min_points)
 
         torch.cuda.empty_cache()
 
@@ -289,7 +294,7 @@ class NodesRepo:
             fun_nodes = self._segment_and_merge_functional_elements(
                 merged, post_hoc_iou_thresh, post_hoc_sim_thresh, radius
             )
-            self._denoise_nodes(fun_nodes)
+            self._denoise_nodes(fun_nodes, eps=denoise_eps, min_points=denoise_min_points)
 
             # Assign functional elements back to their objects
             merged = self._assign_functional_elements_to_objects(
@@ -312,8 +317,16 @@ class NodesRepo:
         nodes: List[ObjNode],
         similarity_threshold: float,
         radius: float,
+        structural_threshold_factor: float = 0.5,
     ) -> List[ObjNode]:
-        """Greedily merge nodes by geometric similarity."""
+        """Greedily merge nodes by geometric similarity.
+
+        Structural elements (wall, floor, window) use a lower effective
+        threshold controlled by `structural_threshold_factor` to allow
+        multi-view segments of the same surface to merge more readily,
+        without being so aggressive (old value: 0.25) that they absorb
+        nearby non-structural objects.
+        """
         merged: List[ObjNode] = []
         node_counts: Dict[str, int] = {}
 
@@ -321,12 +334,12 @@ class NodesRepo:
             best_match, best_sim = None, 0.0
 
             for existing in merged:
-                sim = self._compute_geometric_similarity(node, existing, radius)
+                sim = self._compute_geometric_similarity(node, existing, radius, iou_threshold=0.05)
                 if sim > best_sim:
                     best_sim, best_match = sim, existing
 
             threshold = (
-                similarity_threshold * 0.25
+                similarity_threshold * structural_threshold_factor
                 if self._is_structural(node)
                 else similarity_threshold
             )
@@ -378,7 +391,7 @@ class NodesRepo:
             if iou <= iou_threshold:
                 break
             if kept[i] and kept[j]:
-                sim = self._compute_geometric_similarity(nodes[i], nodes[j], radius)
+                sim = self._compute_geometric_similarity(nodes[i], nodes[j], radius, iou_threshold)
                 if sim > similarity_threshold:
                     self._fuse_nodes(nodes[j], nodes[i], node_counts)
                     kept[i] = False
@@ -387,11 +400,21 @@ class NodesRepo:
         logger.info(f"Post-hoc merge: {n} -> {len(result)} nodes")
         return result
 
-    def _denoise_nodes(self, nodes: List[ObjNode]) -> None:
-        """Denoise point clouds using DBSCAN."""
+    def _denoise_nodes(
+        self,
+        nodes: List[ObjNode],
+        eps: float = 0.05,
+        min_points: int = 10,
+    ) -> None:
+        """Denoise point clouds using DBSCAN.
+
+        Default eps=0.05 m matches the typical voxel size so clusters are not
+        over-split, and min_points=10 avoids deleting small or distant objects
+        that are legitimately sparse (old defaults: eps=0.01, min_points=50).
+        """
         for node in nodes:
             if node.pcd and len(node.pcd.points) > 0:
-                node.pcd = pcd_denoise_dbscan(node.pcd, eps=0.01, min_points=50)
+                node.pcd = pcd_denoise_dbscan(node.pcd, eps=eps, min_points=min_points)
 
     def _init_functional_elements_segmentation(self) -> None:
         """Initialize tools needed for functional elements depending on configured method."""
@@ -596,7 +619,9 @@ class NodesRepo:
         node.masks_2d = [node.masks_2d[best_idx]]
         node.rgb_frames = [node.rgb_frames[best_idx]]
         node.frame_indices = (
-            [node.frame_indices[best_idx]] if node.frame_indices else None
+            [node.frame_indices[best_idx]]
+            if node.frame_indices and len(node.frame_indices) > best_idx
+            else node.frame_indices
         )
         if node.bboxs_2d and len(node.bboxs_2d) > best_idx:
             node.bboxs_2d = [node.bboxs_2d[best_idx]]
@@ -643,15 +668,20 @@ class NodesRepo:
                 node.bbox_3d = None
 
     def _compute_geometric_similarity(
-        self, node1: ObjNode, node2: ObjNode, radius: float
+        self, node1: ObjNode, node2: ObjNode, radius: float, iou_threshold: float = 0.05
     ) -> float:
-        """Compute geometric similarity using nearest neighbor ratio."""
+        """Compute geometric similarity using nearest neighbor ratio.
+
+        The IoU pre-filter uses `iou_threshold` so it matches the caller's
+        threshold and never silently blocks pairs that already passed an outer
+        IoU check.
+        """
         if (
             not node1.pcd
             or not node2.pcd
             or node1.pcd.is_empty()
             or node2.pcd.is_empty()
-            or compute_3d_bbox_iou(node1.pcd, node2.pcd) < 0.1
+            or compute_3d_bbox_iou(node1.pcd, node2.pcd) < iou_threshold
         ):
             return 0.0
         return find_overlapping_ratio_faiss(node1.pcd, node2.pcd, radius)
@@ -696,7 +726,7 @@ class NodesRepo:
         results = []
 
         for node in self.object_nodes:
-            if node.feature is not None:
+            if node.feature is not None and len(node.feature) > 0:
                 similarity = np.dot(query_features[0], node.feature)
                 results.append((node, similarity))
 

@@ -9,9 +9,8 @@ from typing import Dict, List, Any, Optional
 from dataclasses import dataclass, field
 from loguru import logger
 
-import numpy as np
-
 from keysg.rag.graph_context_retriever import GraphContextRetriever
+from keysg.scene_segmentor.obj_node import ObjNode
 
 
 @dataclass
@@ -28,7 +27,7 @@ class RoomNode:
     floor_id: str
     summary: str = ""
     keyframes: List["KeyframeNode"] = field(default_factory=list)
-    objects: List["ObjectNode"] = field(default_factory=list)
+    objects: List[ObjNode] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -39,27 +38,8 @@ class KeyframeNode:
     image_path: str
     labeled_image_path: str = ""
     description: str = ""
+    object_ids: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class ObjectNode:
-    id: str
-    room_id: str
-    label: str
-    description: str = ""
-    bbox_3d: Optional[Any] = None
-    feature: Optional[np.ndarray] = None
-    functional_elements: List["FunctionalElement"] = field(default_factory=list)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class FunctionalElement:
-    id: str
-    parent_object_id: str
-    label: str
-    bbox_3d: Optional[Any] = None
 
 
 class KeySGGraph:
@@ -69,7 +49,7 @@ class KeySGGraph:
         self.output_dir = output_dir
         self.floors: List[FloorNode] = []
         self.rooms: Dict[str, RoomNode] = {}
-        self.objects: Dict[str, ObjectNode] = {}
+        self.objects: Dict[str, ObjNode] = {}
         self._retriever: Optional[Any] = None
         self._rag_initialized: bool = False
         self.scene_name: str = ""
@@ -146,6 +126,10 @@ class KeySGGraph:
     def _load_room(self, room_path: str, room_id: str, floor_id: str) -> Optional[RoomNode]:
         room_node = RoomNode(id=room_id, floor_id=floor_id)
 
+        # Build a per-object vlm description lookup from the room's VLM JSON.
+        # frames[].description.objects[] entries are keyed by object id and used
+        # to fill in vlm_description when it is absent from the pkl.
+        vlm_obj_lookup: Dict[str, dict] = {}
         vlm_path = os.path.join(room_path, f"room_{room_id}_vlm.json")
         if not os.path.exists(vlm_path):
             vlm_path = os.path.join(room_path, f"{room_id}_vlm.json")
@@ -159,61 +143,46 @@ class KeySGGraph:
             for frame_data in vlm_data.get("frames", []):
                 idx = frame_data.get("index", 0)
                 labeled_path = os.path.join(labeled_dir, f"frame_{idx:06d}.png")
+                frame_desc = frame_data.get("description", {})
+                frame_objects = frame_desc.get("objects", [])
                 keyframe = KeyframeNode(
                     index=idx,
                     room_id=room_id,
                     image_path=frame_data.get("path", ""),
                     labeled_image_path=labeled_path if os.path.isfile(labeled_path) else "",
-                    description=frame_data.get("description", {}).get("caption", ""),
+                    description=frame_desc.get("caption", ""),
+                    object_ids=[o["id"] for o in frame_objects if o.get("id")],
                     metadata=frame_data,
                 )
                 room_node.keyframes.append(keyframe)
+                # Collect per-object descriptions; first occurrence wins
+                for obj_desc in frame_objects:
+                    obj_id = obj_desc.get("id")
+                    if obj_id and obj_id not in vlm_obj_lookup:
+                        vlm_obj_lookup[obj_id] = obj_desc
 
+        # Load ObjNode instances from pkl files.
+        # Each pkl stores a plain dict matching ObjNode.to_dict() output.
         nodes_dir = os.path.join(room_path, "nodes")
         if os.path.isdir(nodes_dir):
-            for node_file in os.listdir(nodes_dir):
+            for node_file in sorted(os.listdir(nodes_dir)):
                 if not node_file.endswith(".pkl"):
                     continue
                 try:
                     with open(os.path.join(nodes_dir, node_file), "rb") as f:
-                        obj_data = pickle.load(f)
-                    if not isinstance(obj_data, dict):
-                        obj_data = obj_data.__dict__ if hasattr(obj_data, "__dict__") else {}
+                        raw = pickle.load(f)
 
-                    vlm_desc = obj_data.get("vlm_description") or {}
-                    label = obj_data.get("label") or "unknown"
-                    description = vlm_desc.get("description", "")
-                    if vlm_desc.get("attributes"):
-                        description += " Attributes: " + ", ".join(str(a) for a in vlm_desc["attributes"]) + "."
-                    if vlm_desc.get("state"):
-                        description += f" State: {vlm_desc['state']}."
-                    if vlm_desc.get("location description"):
-                        description += f" Location: {vlm_desc['location description']}."
-                    if not description:
-                        description = label
+                    if isinstance(raw, ObjNode):
+                        obj_node = raw
+                    elif isinstance(raw, dict):
+                        obj_node = ObjNode.from_dict(raw)
+                    else:
+                        obj_node = ObjNode.from_dict(raw.__dict__ if hasattr(raw, "__dict__") else {})
 
-                    obj_node = ObjectNode(
-                        id=obj_data.get("id") or node_file.replace(".pkl", ""),
-                        room_id=room_id,
-                        label=label,
-                        description=description,
-                        bbox_3d=obj_data.get("bbox_3d"),
-                        feature=obj_data.get("feature"),
-                        metadata={"raw": obj_data, "vlm_description": vlm_desc},
-                    )
-                    for fe_data in (obj_data.get("functional_elements") or []):
-                        if isinstance(fe_data, dict) and fe_data.get("__type__") == "ObjNode":
-                            fe_inner = fe_data.get("data", {})
-                        elif isinstance(fe_data, dict):
-                            fe_inner = fe_data
-                        else:
-                            continue
-                        obj_node.functional_elements.append(FunctionalElement(
-                            id=fe_inner.get("id", ""),
-                            parent_object_id=obj_node.id,
-                            label=fe_inner.get("label", ""),
-                            bbox_3d=fe_inner.get("bbox_3d"),
-                        ))
+                    # Supplement vlm_description from the JSON lookup when absent in pkl
+                    if obj_node.vlm_description is None and obj_node.id in vlm_obj_lookup:
+                        obj_node.vlm_description = vlm_obj_lookup[obj_node.id]
+
                     room_node.objects.append(obj_node)
                     self.objects[obj_node.id] = obj_node
                 except Exception as e:

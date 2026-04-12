@@ -118,7 +118,7 @@ keysg-vis --scene_dir <path> --port 8090
 ### 3. 🐍 Programmatic Access
 
 ```python
-from hovfun.graph import KeySGGraph
+from keysg.graph import KeySGGraph
 
 # Load scene graph (RAG index built from cache if available)
 graph = KeySGGraph.from_output_dir("output/keysg_rag1/ScanNet/scene0011_00")
