@@ -211,6 +211,116 @@ class KeySGGraph:
         self._rag_initialized = True
         logger.info("RAG database built successfully")
 
+    def _ensure_rag(self) -> GraphContextRetriever:
+        """Lazily build RAG database if not already done."""
+        if not self._rag_initialized:
+            self.build_rag_database()
+        return self._retriever
+
+    def ground(
+        self,
+        query: str,
+        top_k_objects: int = 10,
+        top_k_frames: int = 4,
+        max_frame_images: int = 4,
+    ) -> Dict[str, Any]:
+        """Find the object matching a natural-language query.
+
+        Returns dict with object_id, label, confidence, reason, and keyframes
+        where the matched object appeared.
+
+        Example:
+            graph = KeySGGraph.from_output_dir("output/scene0011_00")
+            result = graph.ground("the red mug on the kitchen counter")
+            print(result["object_id"], result["keyframes"])
+        """
+        from keysg.visualization.visualizer import _run_grounding_query
+
+        objects_list = list(self.objects.values())
+        return _run_grounding_query(
+            self.output_dir,
+            query,
+            top_k_objects=top_k_objects,
+            top_k_frames=top_k_frames,
+            max_frame_images=max_frame_images,
+            retriever=self._ensure_rag(),
+            objects=objects_list,
+        )
+
+    def search_frames(
+        self,
+        query: str,
+        mode: str = "rag_only",
+        top_k: int = 10,
+        max_frame_images: int = 10,
+    ) -> Dict[str, Any]:
+        """Search keyframes by natural-language query.
+
+        Args:
+            query: Natural language search query.
+            mode: 'rag_only' (fast, no LLM) or 'rag_llm' (RAG + LLM re-ranking
+                  with gpt-5.4-mini, high detail).
+            top_k: Maximum number of frames to return.
+            max_frame_images: Max images passed to LLM (rag_llm only).
+
+        Example:
+            result = graph.search_frames("kitchen area with appliances", mode="rag_only")
+            for frame in result["frames"]:
+                print(frame["frame_id"], frame["score"])
+        """
+        from keysg.visualization.visualizer import _run_keyframe_search
+
+        objects_list = list(self.objects.values())
+        return _run_keyframe_search(
+            query,
+            mode=mode,
+            top_k=top_k,
+            max_frame_images=max_frame_images,
+            retriever=self._ensure_rag(),
+            objects=objects_list,
+        )
+
+    def get_object_keyframes(self, object_id: str) -> List[Dict[str, Any]]:
+        """Return all keyframes where a specific object appears.
+
+        Uses two sources:
+        1. ObjNode.frame_indices — frames where GSAM2 detected the object.
+        2. KeyframeNode.object_ids — keyframes that reference this object.
+
+        Returns list of dicts with frame_id, frame_index, room_id, image_path,
+        and description.
+
+        Example:
+            keyframes = graph.get_object_keyframes("obj_42_abc")
+            for kf in keyframes:
+                print(kf["frame_id"], kf["image_path"])
+        """
+        keyframes: List[Dict[str, Any]] = []
+        seen_indices: set = set()
+
+        # Source 1: ObjNode.frame_indices (detection-based)
+        obj_node = self.objects.get(object_id)
+        obj_frame_indices = set()
+        if obj_node:
+            obj_frame_indices = set(getattr(obj_node, "frame_indices", None) or [])
+
+        # Source 2: KeyframeNode.object_ids (VLM description-based)
+        for room in self.rooms.values():
+            for kf in room.keyframes:
+                in_obj_ids = object_id in kf.object_ids
+                in_frame_indices = kf.index in obj_frame_indices
+                if (in_obj_ids or in_frame_indices) and kf.index not in seen_indices:
+                    seen_indices.add(kf.index)
+                    keyframes.append({
+                        "frame_id": f"frame_{room.id}_{kf.index}",
+                        "frame_index": kf.index,
+                        "room_id": room.id,
+                        "image_path": kf.labeled_image_path or kf.image_path,
+                        "description": kf.description[:200] if kf.description else "",
+                    })
+
+        return keyframes
+
     def save(self, path: str) -> None:
         data = {
             "output_dir": self.output_dir,

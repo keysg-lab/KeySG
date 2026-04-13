@@ -96,22 +96,23 @@ _OBJECT_SELECTION_SYSTEM_PROMPT = (
     "You are a spatial reasoning expert. Your PRIMARY task is to visually identify the object "
     "described by the USER QUERY by carefully examining the attached scene images.\n\n"
     "Each image has its FRAME_ID stamped in the top-left corner. Match this to the corresponding "
-    "entry in 'Relevant Frames' to cross-reference the visual content with the text description.\n\n"
+    "entry in 'Relevant Frames' to cross-reference the visual content and object ids with the text description.\n\n"
     "Decision Logic — follow in order:\n"
-    "1. **Visual Grounding (primary):** Look at every attached image. Identify the object that best "
+    "1. **Visual Grounding (primary):** Look at every attached image. Identify the object ids that best "
     "matches the USER QUERY in terms of appearance, color, shape, and position. Trust what you see.\n"
     "2. **Cross-Reference Candidate List (secondary):** The 'Target Object Candidates' list is a "
     "retrieval shortlist — use it to map your visual observation to an `object_id`. Do NOT blindly "
     "rank by list order; only pick an ID that visually matches what you found in step 1.\n"
+    "Its possible the correct object is not in the candidate list, or that multiple candidates look similar — rely on the images, not the list.\n"
     "3. **Spatial Verification:** Apply spatial constraints from the query (e.g., 'left of', 'near') "
     "using image evidence and any provided Spatial Relations.\n"
     "4. **Anchor Objects:** If anchor objects are listed, locate them visually first, then apply the "
     "spatial relation to narrow down the target.\n"
     "5. **Selection:** Choose the `object_id` with the strongest combined visual + spatial evidence. "
-    "If ambiguous, provide the closest guess with low confidence.\n\n"
+    "If ambiguous, provide the closest guess.\n\n"
     "Output Requirements:\n"
     "- **Format:** Respond ONLY in the enforced JSON schema.\n"
-    "- **ID Validity:** Only use IDs from the Candidate List — never hallucinate IDs.\n"
+    "- **ID Validity:** Only use IDs from the Candidate List or from the Frame metadata — never hallucinate IDs.\n"
     "- **Confidence:**\n"
     "  - High (~0.9): Clear visual match, unambiguous.\n"
     "  - Medium (0.6-0.75): Good match but some visual uncertainty.\n"
@@ -192,6 +193,14 @@ def _load_frame_images(frame_chunks: List, max_images: int = 4) -> List:
 
 
 def _build_spatial_relations(target_vis, anchor_vis, obj_by_id) -> List[str]:
+    """Build rich directional spatial relation strings between target and anchor objects.
+
+    Computes:
+      - Euclidean distance
+      - Directional predicates (left/right, above/below, in front/behind)
+      - Support relation detection ('on top of')
+      - Horizontal distance
+    """
     lines = []
     for tr in target_vis[:3]:
         t_obj = obj_by_id.get(tr.chunk.id)
@@ -201,6 +210,8 @@ def _build_spatial_relations(target_vis, anchor_vis, obj_by_id) -> List[str]:
         if t_pcd is None or len(t_pcd.points) == 0:
             continue
         t_center = np.asarray(t_pcd.points).mean(axis=0)
+        t_min = np.asarray(t_pcd.get_min_bound())
+        t_max = np.asarray(t_pcd.get_max_bound())
         for ar in anchor_vis[:3]:
             a_obj = obj_by_id.get(ar.chunk.id)
             if a_obj is None:
@@ -209,10 +220,36 @@ def _build_spatial_relations(target_vis, anchor_vis, obj_by_id) -> List[str]:
             if a_pcd is None or len(a_pcd.points) == 0:
                 continue
             a_center = np.asarray(a_pcd.points).mean(axis=0)
-            dist = float(np.linalg.norm(t_center - a_center))
+            a_min = np.asarray(a_pcd.get_min_bound())
+            a_max = np.asarray(a_pcd.get_max_bound())
+
+            delta = t_center - a_center
+            dist = float(np.linalg.norm(delta))
+            horiz_dist = float(np.linalg.norm(delta[[0, 2]]))
+
+            # Directional predicates (world-frame: X=right, Y=up, Z=forward)
+            directions = []
+            if abs(delta[0]) > 0.2:
+                directions.append("to the right of" if delta[0] > 0 else "to the left of")
+            if abs(delta[1]) > 0.2:
+                directions.append("above" if delta[1] > 0 else "below")
+            if abs(delta[2]) > 0.2:
+                directions.append("in front of" if delta[2] > 0 else "behind")
+
+            # Support / contact detection via vertical gap analysis
+            t_extent_y = float(t_max[1] - t_min[1])
+            a_extent_y = float(a_max[1] - a_min[1])
+            vertical_gap = abs(delta[1])
+            if vertical_gap < (t_extent_y + a_extent_y) * 0.3 and delta[1] > 0:
+                directions.append("on top of")
+
+            dir_str = ", ".join(directions) if directions else "near"
+
             lines.append(
                 f"ID={tr.chunk.id} ({getattr(t_obj, 'label', '?')}) "
-                f"is {dist:.2f}m from ID={ar.chunk.id} ({getattr(a_obj, 'label', '?')})"
+                f"is {dist:.2f}m ({dir_str}) "
+                f"ID={ar.chunk.id} ({getattr(a_obj, 'label', '?')}) "
+                f"[horiz={horiz_dist:.2f}m, vert={delta[1]:.2f}m]"
             )
     return lines
 
@@ -310,68 +347,105 @@ def _run_grounding_query(
     )
     top_frame_chunks = [chunk_map[fid] for fid in top_frame_ids if fid in chunk_map]
 
-    if not target_vis:
-        return {
-            "object_id": None,
-            "label": None,
-            "confidence": 0.0,
-            "reason": "No candidates found",
-        }
+    pred_id = None
+    confidence = 0.0
+    reason = "No candidates found"
 
-    # Phase 3: build context (same format as nr3d_eval)
-    sections = [
-        f"USER QUERY: {query}",
-        f"PARSED TARGET: {target_q}",
-        f"PARSED ANCHORS: {anchor_objects}",
-    ]
-    lines = ["Target Object Candidates:"]
-    for i, r in enumerate(target_vis):
-        lines.append(f"{i+1}. ID={r.chunk.id}). Desc={r.chunk.content}")
-    sections.append("\n".join(lines))
-
-    if anchor_vis:
-        lines = ["Anchor Object Candidates:"]
-        for i, r in enumerate(anchor_vis):
-            lines.append(f"{i+1}. ID={r.chunk.id}. Desc={r.chunk.content}")
+    if target_vis:
+        # Phase 3: build context (same format as nr3d_eval)
+        sections = [
+            f"USER QUERY: {query}",
+            f"PARSED TARGET: {target_q}",
+            f"PARSED ANCHORS: {anchor_objects}",
+        ]
+        lines = ["Target Object Candidates:"]
+        for i, r in enumerate(target_vis):
+            lines.append(f"{i+1}. ID={r.chunk.id}). Desc={r.chunk.content}")
         sections.append("\n".join(lines))
 
-    if top_frame_chunks:
-        lines = ["Relevant Frames:"]
-        for i, c in enumerate(top_frame_chunks):
-            lines.append(f"{i+1}. FRAME_ID={c.id}. {c.content}")
-        sections.append("\n".join(lines))
+        if anchor_vis:
+            lines = ["Anchor Object Candidates:"]
+            for i, r in enumerate(anchor_vis):
+                lines.append(f"{i+1}. ID={r.chunk.id}. Desc={r.chunk.content}")
+            sections.append("\n".join(lines))
 
-    if target_vis and anchor_vis and relation_polarity and objects:
-        obj_by_id = {str(o.id): o for o in objects}
-        spatial_lines = _build_spatial_relations(target_vis, anchor_vis, obj_by_id)
-        if spatial_lines:
-            sections.append(
-                "Spatial Relations (target <-> anchor):\n" + "\n".join(spatial_lines)
+        if top_frame_chunks:
+            lines = ["Relevant Frames:"]
+            for i, c in enumerate(top_frame_chunks):
+                lines.append(f"{i+1}. FRAME_ID={c.id}. {c.content}")
+            sections.append("\n".join(lines))
+
+        if target_vis and anchor_vis and relation_polarity and objects:
+            obj_by_id = {str(o.id): o for o in objects}
+            spatial_lines = _build_spatial_relations(target_vis, anchor_vis, obj_by_id)
+            if spatial_lines:
+                sections.append(
+                    "Spatial Relations (target <-> anchor):\n" + "\n".join(spatial_lines)
+                )
+
+        context_text = "\n\n".join(sections)
+        frame_images = _load_frame_images(top_frame_chunks, max_frame_images)
+
+        # Phase 4: LLM selection
+        try:
+            sel = gpt.structured_prompt(
+                context_text,
+                response_model=ObjectSelection,
+                model="gpt-5.4-mini",
+                image=frame_images if frame_images else None,
+                detail="high",
+                instructions=_OBJECT_SELECTION_SYSTEM_PROMPT,
             )
+            pred_id = sel.object_id or sel.guess_id
+            confidence = sel.confidence
+            reason = sel.reason
+        except Exception as e:
+            logger.warning("LLM object selection failed: {}", e)
+            pred_id = target_vis[0].chunk.id
+            confidence = float(target_vis[0].score)
+            reason = "Fallback to top RAG hit"
 
-    context_text = "\n\n".join(sections)
-    frame_images = _load_frame_images(top_frame_chunks, max_frame_images)
-
-    # Phase 4: LLM selection
-    try:
-        sel = gpt.structured_prompt(
-            context_text,
-            response_model=ObjectSelection,
-            model="gpt-5-mini",
-            image=frame_images if frame_images else None,
-            detail="high",
-            instructions=_OBJECT_SELECTION_SYSTEM_PROMPT,
+    # Phase 5: collect keyframes where the matched object appeared
+    keyframes: List[Dict[str, Any]] = []
+    if pred_id and objects:
+        matched_obj = next(
+            (o for o in objects if str(getattr(o, "id", "")) == str(pred_id)), None
         )
-        pred_id = sel.object_id or sel.guess_id
-        confidence = sel.confidence
-        reason = sel.reason
-    except Exception as e:
-        logger.warning("LLM object selection failed: {}", e)
-        pred_id = target_vis[0].chunk.id
-        confidence = float(target_vis[0].score)
-        reason = "Fallback to top RAG hit"
+        if matched_obj:
+            obj_frame_indices = set(getattr(matched_obj, "frame_indices", None) or [])
+            # Find frame chunks whose frame_index is in the object's frame_indices
+            for chunk in retriever.chunks:
+                if chunk.doc_type != "frame":
+                    continue
+                meta = chunk.metadata or {}
+                fidx = meta.get("frame_index")
+                if fidx is not None and fidx in obj_frame_indices:
+                    keyframes.append({
+                        "frame_id": chunk.id,
+                        "frame_index": fidx,
+                        "room_id": meta.get("room_id", ""),
+                        "image_path": meta.get("labeled_image_path") or meta.get("image_path", ""),
+                        "description": chunk.content[:200] if chunk.content else "",
+                    })
 
-    return {"object_id": pred_id, "confidence": confidence, "reason": reason}
+    obj_label = None
+    if pred_id and objects:
+        obj_label = next(
+            (
+                getattr(o, "label", pred_id)
+                for o in objects
+                if str(getattr(o, "id", "")) == str(pred_id)
+            ),
+            None,
+        )
+
+    return {
+        "object_id": pred_id,
+        "label": obj_label,
+        "confidence": confidence,
+        "reason": reason,
+        "keyframes": keyframes,
+    }
 
 
 _OPEN_QA_SYSTEM_PROMPT = (
@@ -381,6 +455,136 @@ _OPEN_QA_SYSTEM_PROMPT = (
     "If the context is insufficient to answer confidently, say so clearly."
 )
 
+_FRAME_RERANK_SYSTEM_PROMPT = (
+    "You are a visual scene understanding expert. Given a user query and a set of "
+    "keyframe images with their descriptions, your task is to:\n"
+    "1. Rank the frames by relevance to the query.\n"
+    "2. For each frame, provide a brief explanation of why it is or isn't relevant.\n"
+    "3. Only include frames that are genuinely relevant to the query.\n"
+    "Output the ranked list in the enforced JSON schema."
+)
+
+
+def _run_keyframe_search(
+    query: str,
+    mode: str = "rag_only",
+    top_k: int = 10,
+    max_frame_images: int = 10,
+    retriever=None,
+    objects=None,
+) -> Dict[str, Any]:
+    """Search keyframes by query with two modes.
+
+    Args:
+        query: Natural language search query.
+        mode: 'rag_only' (fast, no LLM) or 'rag_llm' (RAG + LLM re-ranking).
+        top_k: Maximum number of frames to return.
+        max_frame_images: Max images to pass to LLM (rag_llm mode only).
+        retriever: Pre-built GraphContextRetriever.
+        objects: List of ObjNode instances.
+
+    Returns:
+        Dict with query, mode, and ranked frames list.
+    """
+    from pydantic import BaseModel, Field as PydanticField
+
+    if retriever is None:
+        from keysg.rag.graph_context_retriever import GraphContextRetriever
+        raise ValueError("retriever must be provided")
+
+    # RAG retrieval on frame chunks
+    frame_results = retriever.search(
+        query,
+        top_k=top_k * 2,  # over-retrieve then trim
+        doc_types=["frame"],
+        object_modality="both",
+        frame_modality="both",
+    )
+    top_frame_ids = _rank_frame_ids(
+        frame_results, top_k, include_visual=True, include_text=True
+    )
+    chunk_map = {c.id: c for c in retriever.chunks}
+    top_frame_chunks = [chunk_map[fid] for fid in top_frame_ids if fid in chunk_map]
+
+    # Build frame info list
+    frames: List[Dict[str, Any]] = []
+    # Collect RAG scores for each frame
+    score_map: Dict[str, float] = {}
+    for modality_hits in frame_results.values():
+        for r in modality_hits:
+            if r.chunk.id not in score_map or r.score > score_map[r.chunk.id]:
+                score_map[r.chunk.id] = r.score
+
+    for chunk in top_frame_chunks:
+        meta = chunk.metadata or {}
+        frames.append({
+            "frame_id": chunk.id,
+            "frame_index": meta.get("frame_index"),
+            "room_id": meta.get("room_id", ""),
+            "score": float(score_map.get(chunk.id, 0.0)),
+            "description": chunk.content[:300] if chunk.content else "",
+            "image_path": meta.get("labeled_image_path") or meta.get("image_path", ""),
+            "objects_in_frame": meta.get("node_tags", []),
+        })
+
+    if mode == "rag_only" or not frames:
+        return {"query": query, "mode": mode, "frames": frames[:top_k]}
+
+    # --- rag_llm mode: re-rank with LLM ---
+    from models.llm.openai_api import GPTInterface
+
+    class RankedFrame(BaseModel):
+        frame_id: str = PydanticField(description="Frame ID from the list")
+        relevance: str = PydanticField(description="Brief explanation of relevance")
+        score: float = PydanticField(ge=0, le=1, description="Relevance score 0-1")
+
+    class FrameRanking(BaseModel):
+        ranked_frames: List[RankedFrame] = PydanticField(
+            description="Frames ranked by relevance, most relevant first"
+        )
+
+    gpt = GPTInterface()
+
+    # Build context
+    sections = [f"USER QUERY: {query}", ""]
+    for i, f in enumerate(frames[:max_frame_images]):
+        sections.append(
+            f"{i+1}. FRAME_ID={f['frame_id']} (room {f['room_id']})\n"
+            f"   Description: {f['description']}\n"
+            f"   Objects: {f['objects_in_frame']}"
+        )
+    context_text = "\n".join(sections)
+
+    # Load images
+    frame_images = _load_frame_images(
+        top_frame_chunks[:max_frame_images], max_frame_images
+    )
+
+    try:
+        ranking = gpt.structured_prompt(
+            context_text,
+            response_model=FrameRanking,
+            model="gpt-5.4-mini",
+            image=frame_images if frame_images else None,
+            detail="high",
+            instructions=_FRAME_RERANK_SYSTEM_PROMPT,
+        )
+        # Merge LLM ranking with original frame data
+        llm_ranked = []
+        frame_data_map = {f["frame_id"]: f for f in frames}
+        for rf in ranking.ranked_frames:
+            base = frame_data_map.get(rf.frame_id)
+            if base:
+                llm_ranked.append({
+                    **base,
+                    "llm_score": rf.score,
+                    "relevance": rf.relevance,
+                })
+        return {"query": query, "mode": mode, "frames": llm_ranked[:top_k]}
+    except Exception as e:
+        logger.warning("LLM frame re-ranking failed: {}", e)
+        # Fallback to RAG-only results
+        return {"query": query, "mode": "rag_only (llm fallback)", "frames": frames[:top_k]}
 
 def _run_open_qa(
     question: str,
@@ -530,6 +734,7 @@ class KeySGVisualizer:
         self._floor_handles: Dict[str, Any] = {}
         self._room_handles: Dict[str, Any] = {}
         self._frustum_handles: Dict[str, Any] = {}
+        self._highlighted_frustums: Dict[str, Any] = {}  # red-highlighted frustum handles
         self._bbox_handle: Optional[Any] = None
 
         # State
@@ -814,6 +1019,116 @@ class KeySGVisualizer:
                 pass
             self._bbox_handle = None
 
+    def _highlight_keyframes(self, keyframe_infos: List[Dict[str, Any]]) -> None:
+        """Re-color matched keyframe frustums to red so they stand out.
+
+        Each entry in keyframe_infos should have 'frame_index' and 'room_id'.
+        We match these to existing frustum handles by reconstructing the handle key.
+        """
+        self._reset_keyframe_highlights()
+
+        seg_dir = os.path.join(self.scene_dir, "segmentation")
+        if not os.path.isdir(seg_dir):
+            return
+
+        # Build a lookup of (room_id, frame_index) -> frustum handle key
+        target_set = set()
+        for kf in keyframe_infos:
+            rid = kf.get("room_id", "")
+            fidx = kf.get("frame_index")
+            if rid and fidx is not None:
+                target_set.add((str(rid), int(fidx)))
+
+        if not target_set:
+            return
+
+        # Walk through the frustum handles and match
+        for handle_name, handle in list(self._frustum_handles.items()):
+            # handle_name = "/keyframes/floor_X/room_Y_Z/idx_str"
+            parts = handle_name.strip("/").split("/")
+            if len(parts) < 4:
+                continue
+            floor_name = parts[1]  # "floor_X"
+            room_name = parts[2]   # "room_Y_Z"
+            idx_str = parts[3]     # "42"
+            room_id = room_name.replace("room_", "")
+            try:
+                frame_idx = int(idx_str)
+            except ValueError:
+                continue
+
+            if (room_id, frame_idx) in target_set:
+                # Remove old frustum and recreate it in red with larger scale
+                try:
+                    old_wxyz = handle.wxyz
+                    old_pos = handle.position
+                except Exception:
+                    continue
+
+                try:
+                    handle.remove()
+                except Exception:
+                    pass
+
+                # Load image for the highlighted frustum
+                floor_id = floor_name.replace("floor_", "")
+                room_path = os.path.join(seg_dir, floor_name, room_name)
+                kf_img_dir = os.path.join(room_path, "keyframes")
+                img_path = os.path.join(kf_img_dir, f"frame_{frame_idx:06d}.jpg")
+                if not os.path.isfile(img_path):
+                    img_path = os.path.join(kf_img_dir, f"frame_{frame_idx:06d}.png")
+                img = _load_thumbnail(img_path)
+
+                try:
+                    new_handle = self.server.scene.add_camera_frustum(
+                        name=handle_name,
+                        fov=np.deg2rad(60.0),
+                        aspect=4.0 / 3.0,
+                        scale=0.25,
+                        wxyz=old_wxyz,
+                        position=old_pos,
+                        image=img,
+                        color=(255, 40, 40),  # red
+                    )
+                    self._frustum_handles[handle_name] = new_handle
+                    self._highlighted_frustums[handle_name] = {
+                        "wxyz": old_wxyz,
+                        "position": old_pos,
+                        "img": img,
+                    }
+                except Exception as e:
+                    logger.debug("Could not highlight frustum {}: {}", handle_name, e)
+
+        if self._highlighted_frustums:
+            logger.info(
+                "Highlighted {} keyframe(s) in red", len(self._highlighted_frustums)
+            )
+
+    def _reset_keyframe_highlights(self) -> None:
+        """Restore any red-highlighted frustums back to the default blue color."""
+        for handle_name, info in list(self._highlighted_frustums.items()):
+            old_handle = self._frustum_handles.get(handle_name)
+            if old_handle is not None:
+                try:
+                    old_handle.remove()
+                except Exception:
+                    pass
+            try:
+                restored = self.server.scene.add_camera_frustum(
+                    name=handle_name,
+                    fov=np.deg2rad(60.0),
+                    aspect=4.0 / 3.0,
+                    scale=0.15,
+                    wxyz=info["wxyz"],
+                    position=info["position"],
+                    image=info.get("img"),
+                    color=(180, 220, 255),  # original blue
+                )
+                self._frustum_handles[handle_name] = restored
+            except Exception as e:
+                logger.debug("Could not restore frustum {}: {}", handle_name, e)
+        self._highlighted_frustums.clear()
+
     # ------------------------------------------------------------------
     # Retriever (cached after first use)
     # ------------------------------------------------------------------
@@ -935,6 +1250,7 @@ class KeySGVisualizer:
                     return
                 grounding_result.content = "_Searching…_"
                 self._clear_bbox()
+                self._reset_keyframe_highlights()
                 try:
                     result = _run_grounding_query(
                         self.scene_dir,
@@ -966,6 +1282,17 @@ class KeySGVisualizer:
                             f"**Reasoning:** {reason}"
                             f"{_center_str}"
                         )
+                        # Show keyframes where the object appeared
+                        kf_list = result.get("keyframes", [])
+                        if kf_list:
+                            kf_ids = ", ".join(
+                                f"`{kf['frame_id']}`" for kf in kf_list[:8]
+                            )
+                            suffix = f" *(+{len(kf_list)-8} more)*" if len(kf_list) > 8 else ""
+                            grounding_result.content += (
+                                f"\n\n**Appeared in keyframes:** {kf_ids}{suffix}"
+                            )
+                        self._highlight_keyframes(kf_list)
                     else:
                         grounding_result.content = f"_No match found._\n\n{reason}"
                 except Exception as e:
@@ -1000,6 +1327,61 @@ class KeySGVisualizer:
                 except Exception as e:
                     logger.error("Open-ended query failed: {}", e)
                     qa_result.content = f"_Error: {e}_"
+
+        # -- Keyframe Search --
+        with self.server.gui.add_folder("Keyframe Search"):
+            kf_input = self.server.gui.add_text(
+                "Query", initial_value="", multiline=True
+            )
+            kf_mode_dd = self.server.gui.add_dropdown(
+                "Mode",
+                options=["RAG Only", "RAG + LLM"],
+                initial_value="RAG Only",
+            )
+            kf_top_k = self.server.gui.add_slider(
+                "Top K", min=1, max=20, step=1, initial_value=10
+            )
+            kf_btn = self.server.gui.add_button("Search Keyframes")
+            kf_result = self.server.gui.add_markdown(
+                "_Search for keyframes matching a query._"
+            )
+
+            @kf_btn.on_click
+            def _(_):
+                q = kf_input.value.strip()
+                if not q:
+                    return
+                kf_result.content = "_Searching…_"
+                self._reset_keyframe_highlights()
+                mode = "rag_only" if kf_mode_dd.value == "RAG Only" else "rag_llm"
+                try:
+                    search_result = _run_keyframe_search(
+                        q,
+                        mode=mode,
+                        top_k=int(kf_top_k.value),
+                        retriever=self._ensure_retriever(),
+                        objects=self.objects,
+                    )
+                    frames = search_result.get("frames", [])
+                    if not frames:
+                        kf_result.content = "_No matching keyframes found._"
+                        return
+                    lines = [f"**Found {len(frames)} keyframe(s)** (mode: {search_result['mode']})\n"]
+                    for i, f in enumerate(frames):
+                        score_val = f.get("llm_score", f.get("score", 0.0))
+                        desc_short = (f.get("description", "") or "")[:120]
+                        line = f"{i+1}. `{f['frame_id']}` — score: {score_val:.2f}"
+                        if f.get("relevance"):
+                            line += f" — {f['relevance']}"
+                        elif desc_short:
+                            line += f" — {desc_short}…"
+                        lines.append(line)
+                    kf_result.content = "\n".join(lines)
+                    # Highlight the found keyframes in the 3D view
+                    self._highlight_keyframes(frames)
+                except Exception as e:
+                    logger.error("Keyframe search failed: {}", e)
+                    kf_result.content = f"_Error: {e}_"
 
     # ------------------------------------------------------------------
     # Public entry point
