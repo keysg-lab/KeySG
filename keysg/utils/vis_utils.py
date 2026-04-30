@@ -1,5 +1,5 @@
 """
-Visualization utilities for HovFun 3D scene graphs.
+Visualization utilities for KeySG 3D scene graphs.
 
 This module provides visualization functions for various types of point clouds
 including nodes, rooms, floors, and functional elements.

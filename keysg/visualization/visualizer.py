@@ -9,7 +9,7 @@ Shows the full KeySG scene graph in 3D:
 
 Usage:
     keysg-vis --scene_dir output/pipeline/ScanNet/scene0011_00
-    python -m hovfun.visualization.visualizer --scene_dir <path> [--port 8080]
+    python -m KeySG.visualization.visualizer --scene_dir <path> [--port 8080]
 """
 
 from __future__ import annotations

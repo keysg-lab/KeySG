@@ -1,4 +1,4 @@
-"""Main pipeline for HovFun scene processing."""
+"""Main pipeline for  scene processing."""
 
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ class KeySGPipeline:
     def _setup_logging(self) -> None:
         """Add per-scene file logging."""
         try:
-            log_path = os.path.join(self.output_dir, "hovfun.log")
+            log_path = os.path.join(self.output_dir, "KeySG.log")
             logger.add(log_path, level="INFO", rotation="10 MB", retention=3)
             logger.info("Logging to {}", log_path)
         except Exception as e:
@@ -503,7 +503,7 @@ class KeySGPipeline:
             "num_objects": len(self.object_nodes),
             "keysg_graph": self.keysg_graph,
         }
-    
+
     def _run_object_descriptions(self) -> None:
         """Describe each object in all rooms and save updated nodes to disk.
 
@@ -581,7 +581,11 @@ class KeySGPipeline:
         logger.info("Saved floor summaries for {} floor(s)", len(floor_summaries))
 
 
-@hydra.main(version_base=None, config_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "config"), config_name="main_pipeline")
+@hydra.main(
+    version_base=None,
+    config_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "config"),
+    config_name="main_pipeline",
+)
 def main(cfg: DictConfig) -> None:
     """Main entry point."""
     setup_logging()

@@ -1,10 +1,10 @@
 """
-Centralized logging setup for the HovFun project.
+Centralized logging setup for the KeySG project.
 
 Goals:
 - Use Loguru consistently across modules.
 - Default to console-only logging (no files).
-- Allow optional file logging via env var HOVFUN_LOG_FILE if needed.
+- Allow optional file logging via env var KeySG_LOG_FILE if needed.
 """
 
 from __future__ import annotations
@@ -18,7 +18,7 @@ def setup_logging() -> None:
 
     - Remove pre-existing handlers to avoid duplicates when re-running.
     - Add a single console sink at INFO level with a concise format.
-    - If env var HOVFUN_LOG_FILE is set to a filepath, also log to that file.
+    - If env var KeySG_LOG_FILE is set to a filepath, also log to that file.
     """
     try:
         logger.remove()
@@ -35,7 +35,7 @@ def setup_logging() -> None:
     )
 
     # Optional file sink controlled by env var
-    log_file = os.environ.get("HOVFUN_LOG_FILE")
+    log_file = os.environ.get("KeySG_LOG_FILE")
     if log_file:
         # Ensure directory exists
         try:

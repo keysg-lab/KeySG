@@ -199,7 +199,7 @@ output/{run_name}/{Dataset}/{Scene}/
 ├── floor_summaries.json              # Floor-level text summaries
 ├── keysg_graph.json                  # Scene graph metadata
 ├── scene_description_index.json      # Room description index
-├── hovfun.log                        # Run log
+├── KeySG.log                        # Run log
 ├── rag_cache/                        # Cached embeddings & FAISS indices
 │   ├── graph_chunks_meta.json
 │   ├── graph_embeddings.npy

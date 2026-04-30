@@ -9,7 +9,7 @@ This module provides a helper function that uses the existing
 
 Typical usage:
 
-    from hovfun.rag.query_analysis import analyze_and_expand_query
+    from KeySG.rag.query_analysis import analyze_and_expand_query
     qa = analyze_and_expand_query("a place to put my drink on the first floor")
     print(qa)
     # qa.expanded_terms -> ["table", "coffee table", "countertop", "desk", "side table", ...]
@@ -38,6 +38,7 @@ try:
     from models.llm.openai_api import GPTInterface
 except ImportError:
     import sys
+
     _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     if _project_root not in sys.path:
         sys.path.insert(0, _project_root)
@@ -164,7 +165,7 @@ def analyze_and_expand_query(
         response_model=_QuerySchema,  # type: ignore[arg-type]
         model=model,
         instructions=SYSTEM_INSTRUCTIONS,
-        reasoning_effort="low", # NOTE: maybe "low" is sufficient.
+        reasoning_effort="low",  # NOTE: maybe "low" is sufficient.
     )
 
     query_parsed: Dict[str, Any] = {}

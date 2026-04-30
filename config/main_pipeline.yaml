@@ -1,5 +1,5 @@
 # Main Pipeline Hydra Configuration
-# This file configures the HovFun 3D scene understanding pipeline
+# This file configures the KeySG 3D scene understanding pipeline
 
 # Dataset configuration
 dataset:

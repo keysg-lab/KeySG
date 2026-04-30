@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
 """
-Nr3D evaluation script for KeySG (with RAG) and KeySG-fixed-edges.
+Nr3D evaluation script for KeySG (with RAG).
 
 This script mirrors the logic in the nr3d_eval notebook:
 - Loads scene annotations and GT scene description JSON
 - Runs queries against KeySG with RAG (graph.query)
-- Runs queries against KeySG-fixed-edges via LLM (scene_graph_llm.json)
 - Computes IoU@0.1 / IoU@0.25 metrics and prints per-split stats
 
 Usage:
   python scripts/nr3d_eval.py \
       --scene_dir output/pipeline_scannet/ScanNet/scene0222_00 \
-      --fixed_edges_dir output/keysg_fixed_edges/ScanNet/scene0222_00 \
-      --mode both
 
   # Only KeySG with RAG
-  python scripts/nr3d_eval.py --scene_dir ... --mode rag
-
-  # Only fixed edges (BBQ-style LLM querying)
-  python scripts/nr3d_eval.py --fixed_edges_dir ... --mode fixed
+  python scripts/nr3d_eval.py --scene_dir 
 """
 
 from __future__ import annotations
@@ -450,9 +444,7 @@ def _run_keysg_rag(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Nr3D evaluation for KeySG with RAG"
-    )
+    parser = argparse.ArgumentParser(description="Nr3D evaluation for KeySG with RAG")
     parser.add_argument(
         "--scene_dir", type=str, required=True, help="KeySG pipeline output directory"
     )

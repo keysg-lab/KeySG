@@ -1,5 +1,5 @@
 """
-RAG (Retrieval-Augmented Generation) module for HovFun.
+RAG (Retrieval-Augmented Generation) module for KeySG.
 
 This module provides:
 - GraphContextRetriever: Hierarchical text-based retrieval using embeddings

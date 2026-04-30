@@ -1,4 +1,4 @@
-"""Scene loading utilities for HovFun outputs.
+"""Scene loading utilities for KeySG outputs.
 
 Canonical implementation for loading floors, rooms, and objects from
 pipeline output directories.
@@ -18,7 +18,7 @@ from keysg.scene_segmentor.obj_node import ObjNode as Object
 
 def load_scene_nodes(output_dir: str) -> Dict[str, Dict[str, List[dict]]]:
     """
-    Load all nodes from a HovFun scene output directory.
+    Load all nodes from a KeySG scene output directory.
 
     Scans: <output_dir>/segmentation/floor_*/room_*/nodes/*.pkl
 
@@ -110,7 +110,7 @@ def get_objects(nodes: Dict[str, Dict[str, List[dict]]]) -> List[Object]:
 
 
 def get_rooms(output_dir: str) -> Dict[str, Room]:
-    """Load all Room objects from a HovFun scene output directory.
+    """Load all Room objects from a KeySG scene output directory.
 
     Scans: <output_dir>/segmentation/floor_*/room_*/room.pkl
 
@@ -181,7 +181,7 @@ def get_rooms(output_dir: str) -> Dict[str, Room]:
 
 
 def get_floors(output_dir: str) -> Dict[str, Floor]:
-    """Load all Floor objects from a HovFun scene output directory.
+    """Load all Floor objects from a KeySG scene output directory.
 
     Scans: <output_dir>/segmentation/floor_*/floor.pkl
 
