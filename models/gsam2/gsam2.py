@@ -44,14 +44,14 @@ class GroundingSAM2:
         self,
         sam2_checkpoint: str,
         sam2_model_config: str,
-        llmdet_model_id: str,
+        llmdet_model_id: Optional[str] = None,
         device: Optional[str] = None,
         force_cpu: bool = False,
-        llmdet_max_tags_per_batch: int = 30,
+        llmdet_max_tags_per_batch: int = 80,
     ):
         self.sam2_checkpoint = sam2_checkpoint
         self.sam2_model_config = sam2_model_config
-        self.llmdet_model_id = llmdet_model_id
+        self.llmdet_model_id = llmdet_model_id or "iSEE-Laboratory/llmdet_large"
         self.llmdet_max_tags_per_batch = llmdet_max_tags_per_batch
         self._vlm_client = None
 
@@ -139,7 +139,7 @@ class GroundingSAM2:
                 pil_image, [tags], box_threshold, multimask_output
             )
 
-        all_boxes, all_masks, all_scores, all_labels = [], [], [], []
+        all_boxes, all_masks, all_scores, all_labels, all_class_ids = [], [], [], [], []
 
         for i in range(0, len(tags), self.llmdet_max_tags_per_batch):
             batch_tags = tags[i : i + self.llmdet_max_tags_per_batch]
@@ -152,6 +152,9 @@ class GroundingSAM2:
                 all_masks.append(batch_results["masks"])
                 all_scores.append(batch_results["scores"])
                 all_labels.extend(batch_results["labels"])
+                base_id = len(all_class_ids)
+                adjusted_class_ids = batch_results["class_ids"] + base_id
+                all_class_ids.extend(adjusted_class_ids)
 
         if not all_boxes:
             return {
@@ -166,17 +169,16 @@ class GroundingSAM2:
         merged_boxes = np.vstack(all_boxes)
         merged_masks = np.vstack(all_masks)
         merged_scores = np.hstack(all_scores)
+        merged_class_ids = np.array(all_class_ids)
 
         final_indices = self._resolve_mask_overlaps(merged_masks, merged_scores)
 
-        # Regenerate sequential class_ids after overlap resolution so that
-        # labels[i] is always aligned with class_ids[i].
         return {
             "boxes": merged_boxes[final_indices],
             "masks": merged_masks[final_indices].astype(bool),
             "scores": merged_scores[final_indices],
             "labels": [all_labels[i] for i in final_indices],
-            "class_ids": np.arange(len(final_indices)),
+            "class_ids": merged_class_ids[final_indices],
             "image_size": pil_image.size,
         }
 
@@ -192,8 +194,6 @@ class GroundingSAM2:
             images=pil_image,
             text=texts,
             return_tensors="pt",
-            truncation=True,
-            max_length=256,
         ).to(self.device)
 
         with torch.no_grad():
@@ -218,9 +218,14 @@ class GroundingSAM2:
         input_boxes = llm_results[0]["boxes"].cpu().numpy()
         confidences = llm_results[0]["scores"].cpu().numpy()
 
-        # text_labels holds string names in transformers >= 4.51; labels did so before
-        class_names = llm_results[0].get("text_labels", llm_results[0]["labels"])
-        class_ids = np.arange(len(class_names))
+        raw_labels = llm_results[0]["labels"]
+        try:
+            label_indices = raw_labels.cpu().numpy()
+            class_names = [texts[0][int(li)] for li in label_indices]
+            class_ids = label_indices.astype(int)
+        except Exception:
+            class_names = [str(label) for label in raw_labels]
+            class_ids = np.arange(len(class_names))
 
         masks, sam_scores, logits = self.sam2_predictor.predict(
             point_coords=None,

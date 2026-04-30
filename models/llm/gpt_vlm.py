@@ -57,7 +57,10 @@ class GPT_VLMInterface:
 
     def tag_functional_elements_in_image(self, image: Image.Image, max_tags: int = 50) -> List[str]:
         """Tag functional/interactive elements in an image."""
-        prompt = f"List all functional control/interaction elements visible (e.g., handle, knob). Never include object names. Cap at {max_tags} items."
+        prompt = (
+            "List all functional control/interaction elements visible in this image (e.g., handle, knob, ..) , never include object names, even partially."
+            f"Cap at {max_tags} items."
+        )
         try:
             response = self.client.structured_prompt(
                 prompt=prompt,
@@ -112,9 +115,11 @@ class GPT_VLMInterface:
 
         node_info = json.dumps(visible_nodes, indent=2)
         prompt = (
-            f"Describe this RGB image with knowledge of visible 3D object nodes:\n\n"
+            f"Describe this RGB image with knowledge of the following 3D object nodes that are visible in this frame:\n\n"
             f"Visible Objects:\n{node_info}\n\n"
-            f"Reference objects using their node ID. Describe spatial relationships."
+            f"When describing objects that you can clearly identify and match to the provided nodes, "
+            f"reference them using their node ID (e.g., '{'node_id'}'). "
+            f"Describe the spatial relationships, states, and interactions between these grounded objects and any other visible elements."
         )
         try:
             response = self.client.structured_prompt(
@@ -147,15 +152,20 @@ class GPT_VLMInterface:
 
         compact_obs = json.dumps(observations, ensure_ascii=False)
         prompt = (
-            "Fuse these observations from the SAME room into a single room-level summary.\n"
-            f"Observations: {compact_obs}\n\nProduce the comprehensive room-level scene summary."
+            "You will receive observations extracted from multiple frames of the SAME room (images may overlap or come from different viewpoints).\n"
+            "Fuse them into a single, room-level, high-confidence scene summary.\n"
+            "Use object IDs to reference specific items in the scene.\n"
+            "Avoid hallucinations; be conservative and grounded in the observations.\n\n"
+            f"Observations: {compact_obs}\n\n"
+            "Now produce the comprehensive room-level scene summary."
         )
+        sys_inst = system_instruction_summary()
         try:
             response = self.client.structured_prompt(
                 prompt=prompt,
                 response_model=SceneSummary,
                 model="gpt-5-mini",
-                instructions=system_instruction_summary(),
+                instructions=sys_inst,
                 reasoning_effort="medium",
             )
             if isinstance(response, SceneSummary):
@@ -163,13 +173,18 @@ class GPT_VLMInterface:
         except Exception as e:
             print(f"Error in summarize_scene: {e}")
             try:
-                return self.client.text_prompt(
-                    f"Summarize these room observations:\n\n{compact_obs}",
-                    model="gpt-5-mini",
-                    instructions=system_instruction_summary(),
+                fallback_prompt = (
+                    "Summarize the following room observations into a concise description:\n\n"
+                    f"{compact_obs}"
                 )
-            except Exception:
-                pass
+                return self.client.text_prompt(
+                    fallback_prompt,
+                    model="gpt-5-mini",
+                    instructions=sys_inst,
+                )
+            except Exception as fallback_e:
+                print(f"Fallback summarization also failed: {fallback_e}")
+                return ""
         return ""
 
     def ground_summary(
@@ -186,11 +201,12 @@ class GPT_VLMInterface:
         else:
             summary_dict = scene_summary
 
+        objects_info = json.dumps(detected_objects, indent=2)
         prompt = (
-            f"Ground this scene summary with detected objects:\n\n"
+            f"Ground the following scene summary with the detected objects:\n\n"
             f"Scene Summary: {json.dumps(summary_dict, indent=2)}\n\n"
-            f"Detected Objects: {json.dumps(detected_objects, indent=2)}\n\n"
-            f"Match objects and assign appropriate IDs."
+            f"Detected Objects: {objects_info}\n\n"
+            f"Match objects in the summary with detected objects and assign appropriate IDs."
         )
         try:
             response = self.client.structured_prompt(
@@ -225,9 +241,12 @@ class GPT_VLMInterface:
             else:
                 normalized.append({"id": None, "room_type": None, "room_summary": str(item), "index": idx})
 
+        compact_rooms = json.dumps(normalized, ensure_ascii=False)
         prompt = (
-            f"Create a floor caption and short caption for each room.\n\n"
-            f"Rooms: {json.dumps(normalized, ensure_ascii=False)}"
+            "You will receive a set of room-level notes from the same floor.\n"
+            "Create a concise floor caption and a short, one-line caption for each room.\n\n"
+            f"Rooms: {compact_rooms}\n\n"
+            "Return the result using the specified response schema."
         )
         try:
             response = self.client.structured_prompt(
@@ -403,7 +422,11 @@ class GPT_VLMInterface:
         return [r.tags[:max_tags] if isinstance(r, ObjectTag) else [] for r in results]
 
     async def _batch_tag_functional(self, images: List[Image.Image], max_tags: int) -> List[List[str]]:
-        prompts = [f"List all functional elements. Cap at {max_tags} items." for _ in images]
+        prompts = [
+            "List all functional control/interaction elements visible in this image (e.g., handle, knob, ..) , never include object names, even partially."
+            f"Cap at {max_tags} items."
+            for _ in images
+        ]
         results = await self.client.structured_prompt_batch(
             prompts=prompts, response_model=FunctionalTag, model=self.model,
             images=images, instructions=system_instruction_functional_tagging(),
@@ -412,7 +435,7 @@ class GPT_VLMInterface:
         return [r.functional_tags[:max_tags] if isinstance(r, FunctionalTag) else [] for r in results]
 
     async def _batch_describe(self, images: List[Image.Image]) -> List[Dict[str, Any]]:
-        prompts = ["Describe this single RGB image for scene understanding." for _ in images]
+        prompts = ["Describe this single RGB image for a scene understanding task." for _ in images]
         results = await self.client.structured_prompt_batch(
             prompts=prompts, response_model=ImageDescription, model=self.model,
             images=images, instructions=system_instruction_per_frame(),
@@ -427,12 +450,17 @@ class GPT_VLMInterface:
         prompts = []
         for nodes in nodes_list:
             if not nodes:
-                prompts.append("Describe this single RGB image for scene understanding.")
+                prompts.append(
+                    "Describe this single RGB image for a scene understanding task."
+                )
             else:
                 node_info = json.dumps(nodes, indent=2)
                 prompts.append(
-                    f"Describe this RGB image with visible 3D nodes:\n\n{node_info}\n\n"
-                    f"Reference objects using their node ID."
+                    f"Describe this RGB image with knowledge of the following 3D object nodes that are visible in this frame:\n\n"
+                    f"Visible Objects:\n{node_info}\n\n"
+                    f"When describing objects that you can clearly identify and match to the provided nodes, "
+                    f"reference them using their node ID (e.g., '{'node_id'}'). "
+                    f"Describe the spatial relationships, states, and interactions between these grounded objects and any other visible elements."
                 )
         results = await self.client.structured_prompt_batch(
             prompts=prompts, response_model=ImageDescription, model=self.model,

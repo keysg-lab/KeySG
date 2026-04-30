@@ -142,8 +142,8 @@ def _run_keysg_rag(
     annotations: List[Dict[str, Any]],
     *,
     limit: Optional[int],
-    include_frame_images: bool = False,
-    include_frame_text: bool = False,
+    include_frame_images: bool = True,
+    include_frame_text: bool = True,
     max_frame_images: int = 2,
     rag_model: str = "gpt-5-mini",
     top_k_objects: int = 10,
@@ -464,12 +464,14 @@ def main() -> None:
     )
     parser.add_argument(
         "--include_frame_images",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Include frame images for visual grounding in LLM queries",
     )
     parser.add_argument(
         "--include_frame_text",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=True,
         help="Include top-k frame text descriptions in RAG context",
     )
     parser.add_argument(

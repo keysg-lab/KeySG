@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import json
 import time
+import hashlib
 from typing import List, Dict, Any, Optional, Sequence, Tuple, Set
 from dataclasses import dataclass
 from pydantic import BaseModel, Field
@@ -52,10 +53,22 @@ class SearchResult:
     score: float
 
 
+def _chunk_content_hash(chunk: Chunk) -> str:
+    payload = {
+        "id": chunk.id,
+        "doc_type": chunk.doc_type,
+        "content": chunk.content,
+        "metadata": chunk.metadata,
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 class GraphContextRetriever:
     def __init__(self, output_dir: str):
         # Base directory
         self.output_dir = output_dir.rstrip("/")
+        self.include_node_pickle_objects = True
         # Scene description data
         self.floor_summaries: Dict[str, Any] = {}
         self.room_vlm: Dict[str, Any] = {}
@@ -132,6 +145,7 @@ class GraphContextRetriever:
             self.room_vlm,
             self.room_index_paths,
             output_dir=self.output_dir,
+            include_node_pickle_objects=self.include_node_pickle_objects,
         )
         logger.info("Built {} chunks", len(self.chunks))
         return self.chunks
@@ -195,7 +209,8 @@ class GraphContextRetriever:
                 meta = json.load(f)
             if meta.get("embedding_model") != model_name:
                 return False
-            # Validate chunk count from meta (fast path)
+            # Validate chunk count and identity to avoid reusing embeddings built
+            # for a different chunk ordering/content.
             cached_count = meta.get("total_chunks")
             if cached_count is not None and cached_count != len(self.chunks):
                 logger.info(
@@ -203,6 +218,27 @@ class GraphContextRetriever:
                     cached_count,
                     len(self.chunks),
                 )
+                return False
+            meta_chunks = meta.get("chunks") or []
+            if len(meta_chunks) != len(self.chunks):
+                logger.info(
+                    "Cached embedding metadata chunk count mismatch ({} vs {}); recomputing.",
+                    len(meta_chunks),
+                    len(self.chunks),
+                )
+                return False
+            meta_ids = [rec.get("id") for rec in meta_chunks]
+            chunk_ids = [c.id for c in self.chunks]
+            if meta_ids != chunk_ids:
+                logger.info("Cached embedding chunk identity/order mismatch; recomputing.")
+                return False
+            meta_hashes = [rec.get("content_hash") for rec in meta_chunks]
+            if any(h is None for h in meta_hashes):
+                logger.info("Cached embeddings missing chunk content hashes; recomputing.")
+                return False
+            chunk_hashes = [_chunk_content_hash(c) for c in self.chunks]
+            if meta_hashes != chunk_hashes:
+                logger.info("Cached embedding chunk content mismatch; recomputing.")
                 return False
             emb = np.load(self.emb_path)
             # Double-check embedding row count (guards against meta/npy desync)
@@ -264,7 +300,11 @@ class GraphContextRetriever:
     # Metadata persistence
     # ------------------------------------------------------------------
     def save_metadata(self):
-        records = [c.to_record() for c in self.chunks]
+        records = []
+        for chunk in self.chunks:
+            rec = chunk.to_record()
+            rec["content_hash"] = _chunk_content_hash(chunk)
+            records.append(rec)
         payload = {
             "version": 1,
             "created": time.time(),
@@ -468,7 +508,20 @@ class GraphContextRetriever:
                 emb = np.load(self.object_vis_emb_path)
                 indices = meta.get("object_chunk_indices", [])
                 shape_ok = bool(indices) and emb.shape[0] == len(indices)
-                if chunks_ok and shape_ok:
+                ids_ok = chunks_ok and all(
+                    0 <= idx < len(self.chunks) and self.chunks[idx].doc_type == "object"
+                    for idx in indices
+                )
+                cached_chunk_ids = meta.get("object_chunk_ids") or []
+                chunk_ids_ok = (
+                    bool(cached_chunk_ids)
+                    and len(cached_chunk_ids) == len(indices)
+                    and [
+                        self.chunks[idx].id
+                        for idx in indices
+                    ] == cached_chunk_ids
+                )
+                if chunks_ok and shape_ok and ids_ok and chunk_ids_ok:
                     self.object_visual_embeddings = emb
                     self.object_visual_chunk_indices = indices
                     self.object_visual_index = faiss.read_index(
@@ -480,9 +533,11 @@ class GraphContextRetriever:
                     )
                     return
                 logger.info(
-                    "Object visual cache invalid (chunks_ok=%s shape_ok=%s); rebuilding",
+                    "Object visual cache invalid (chunks_ok=%s shape_ok=%s ids_ok=%s chunk_ids_ok=%s); rebuilding",
                     chunks_ok,
                     shape_ok,
+                    ids_ok,
+                    chunk_ids_ok,
                 )
             except Exception as e:
                 logger.warning("Failed to load cached object visual embeddings: {}", e)
@@ -571,6 +626,9 @@ class GraphContextRetriever:
                         "n_objects": len(self.object_visual_chunk_indices),
                         "total_chunks": len(self.chunks),
                         "object_chunk_indices": self.object_visual_chunk_indices,
+                        "object_chunk_ids": [
+                            self.chunks[idx].id for idx in self.object_visual_chunk_indices
+                        ],
                     },
                     f,
                     indent=2,

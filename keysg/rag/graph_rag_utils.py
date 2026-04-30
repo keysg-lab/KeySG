@@ -92,14 +92,10 @@ class Chunk:
         }
 
 
-def synthesize_object_text(obj: Dict[str, Any], centroid: Optional[Any] = None) -> str:
+def synthesize_object_text(obj: Dict[str, Any]) -> str:
     """Create a canonical descriptive string for an object entry.
 
     Expected keys (best-effort): name, description, affordances(list), state, location description
-
-    Args:
-        obj: Object dictionary with descriptive fields.
-        centroid: Optional 3D centroid array (x, y, z) to embed spatial coordinates.
     """
     name = obj.get("name") or obj.get("id") or "object"
     desc = obj.get("description") or ""
@@ -134,24 +130,10 @@ def synthesize_object_text(obj: Dict[str, Any], centroid: Optional[Any] = None) 
         or "an unspecified location"
     )
 
-    text = (
+    return (
         f"Name: {name}. Description: {desc} "
         f"It can be used to {afford_txt}. It is currently {state} and is located {loc}."
     )
-
-    # Append 3D world coordinates when available so the embedding
-    # can encode spatial position for "nearest" / "closest" queries.
-    if centroid is not None:
-        try:
-            text += (
-                f" World position: x={float(centroid[0]):.2f},"
-                f" y={float(centroid[1]):.2f},"
-                f" z={float(centroid[2]):.2f}."
-            )
-        except (IndexError, TypeError, ValueError):
-            pass  # silently skip malformed centroids
-
-    return text
 
 
 def ensure_text(*parts: Any) -> str:
@@ -479,6 +461,7 @@ def build_chunks_from_descriptions(
     room_vlm: Dict[str, Any],
     room_index_paths: Optional[Dict[str, str]] = None,
     output_dir: Optional[str] = None,
+    include_node_pickle_objects: bool = True,
 ) -> List[Chunk]:
     """Construct chunk list from description dicts (floors, rooms, frames, objects)."""
     chunks: List[Chunk] = []
@@ -614,7 +597,7 @@ def build_chunks_from_descriptions(
 
     # Second pass: node-pickle objects (carry vlm_description + stable IDs).
     # Replaces the room-VLM chunk for the same object_id with a richer version.
-    if output_dir:
+    if output_dir and include_node_pickle_objects:
         import pickle
 
         seg_dir = os.path.join(output_dir, "segmentation")
@@ -660,22 +643,6 @@ def build_chunks_from_descriptions(
                 vlm = nd.get("vlm_description") or {}
                 label = nd.get("label") or "object"
 
-                # Compute centroid from pickled PCD when available
-                centroid = None
-                pcd_data = nd.get("pcd")
-                if isinstance(pcd_data, dict) and pcd_data.get("points") is not None:
-                    pts = pcd_data["points"]
-                    if hasattr(pts, "__len__") and len(pts) > 0:
-                        centroid = np.asarray(pts).mean(axis=0)
-                elif pcd_data is not None:
-                    # pcd_data may be an open3d PointCloud object
-                    try:
-                        pts = np.asarray(pcd_data.points)
-                        if len(pts) > 0:
-                            centroid = pts.mean(axis=0)
-                    except Exception:
-                        pass
-
                 obj_for_text = {
                     "name": vlm.get("name") or label,
                     "description": vlm.get("description") or "",
@@ -688,7 +655,7 @@ def build_chunks_from_descriptions(
                 new_chunk = Chunk(
                     id=obj_id,
                     doc_type="object",
-                    content=synthesize_object_text(obj_for_text, centroid=centroid),
+                    content=synthesize_object_text(obj_for_text),
                     metadata={
                         "room_id": room_id,
                         "object_id": obj_id,
